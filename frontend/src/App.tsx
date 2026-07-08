@@ -1,4 +1,5 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
+import { api } from './api';
 import Dashboard from './pages/Dashboard';
 import Journal from './pages/Journal';
 import Periodic from './pages/Periodic';
@@ -20,6 +21,15 @@ const NAV = [
 ];
 
 export default function App() {
+  const quitApp = async () => {
+    if (!window.confirm('确定退出 LaimiuTrade？退出后需重新双击 exe 启动。')) return;
+    try {
+      await api.post('/api/system/shutdown');
+    } catch {
+      // 进程已退出时 fetch 会失败，属正常情况
+    }
+  };
+
   return (
     <div className="app-shell">
       <aside className="sidebar no-print">
@@ -40,7 +50,10 @@ export default function App() {
             {item.label}
           </NavLink>
         ))}
-        <div className="nav-footer">数据存于本地 · v0.1</div>
+        <div className="nav-footer">
+          <div>数据存于本地 · v0.1</div>
+          <button type="button" className="nav-quit no-print" onClick={quitApp}>退出程序</button>
+        </div>
       </aside>
       <main className="main">
         <Routes>

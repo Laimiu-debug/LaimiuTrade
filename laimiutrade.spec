@@ -10,15 +10,27 @@
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-datas = [("frontend/dist", "frontend_dist")]
+datas = [
+    ("frontend/dist", "frontend_dist"),
+    ("backend/assets/icon.png", "assets"),
+]
 binaries = []
-hiddenimports = collect_submodules("uvicorn")
+hiddenimports = collect_submodules("uvicorn") + ["pystray", "PIL", "PIL.Image", "PIL.ImageDraw"]
 
 # akshare 依赖大量包内数据文件，整体收集
 ak_datas, ak_binaries, ak_hidden = collect_all("akshare")
 datas += ak_datas
 binaries += ak_binaries
 hiddenimports += ak_hidden
+
+# pystray 在 Windows 上依赖 pywin32
+try:
+    pystray_datas, pystray_binaries, pystray_hidden = collect_all("pystray")
+    datas += pystray_datas
+    binaries += pystray_binaries
+    hiddenimports += pystray_hidden
+except Exception:
+    pass
 
 a = Analysis(
     ["backend/launcher.py"],
@@ -47,6 +59,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    icon="backend/assets/icon.ico",
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

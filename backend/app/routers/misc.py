@@ -1,7 +1,9 @@
 """闪记卡片、设置、行情、统计、数据导出。"""
 
 import json
+import os
 import random
+import threading
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -19,6 +21,15 @@ from ..services import settings as settings_svc
 from ..services import stats
 
 router = APIRouter(prefix="/api", tags=["misc"])
+
+
+# ---------- 系统 ----------
+
+@router.post("/system/shutdown")
+def shutdown():
+    """退出整个程序（响应发出后延迟终止进程）。"""
+    threading.Timer(0.4, os._exit, args=(0,)).start()
+    return {"ok": True}
 
 
 # ---------- 闪记卡片 ----------
