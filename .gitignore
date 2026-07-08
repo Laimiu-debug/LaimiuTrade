@@ -10,6 +10,9 @@ frontend/dist/
 # 本地数据（复盘数据库、上传的截图）
 data/
 
+# 截图
+.shots/
+
 # 系统
 .DS_Store
 Thumbs.db
