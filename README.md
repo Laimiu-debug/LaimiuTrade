@@ -13,7 +13,22 @@
 - **灵感闪记**：轻量卡片 + 每日随机温故
 - **导出**：复盘打印为 PDF、JSON 全量备份、Markdown 导出
 
-## 快速开始
+## 快速开始（exe 单文件）
+
+已打包用户直接双击 `LaimiuTrade.exe` 即可：自动启动本地服务并打开浏览器，
+数据保存在 exe 同目录的 `data/` 文件夹（迁移时连同 exe 一起拷走）。
+若浏览器没有自动打开，手动访问 http://127.0.0.1:8000 。
+
+### 自行打包 exe
+
+```bash
+cd frontend && npm run build && cd ..
+backend\.venv\Scripts\pip install pyinstaller
+backend\.venv\Scripts\pyinstaller --noconfirm --clean laimiutrade.spec
+# 产物: dist\LaimiuTrade.exe
+```
+
+## 源码运行
 
 环境要求：Python 3.10+、Node.js 18+
 

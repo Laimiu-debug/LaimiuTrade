@@ -1,9 +1,16 @@
+import sys
 from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+if getattr(sys, "frozen", False):
+    # PyInstaller 打包运行：数据放在 exe 同目录，随 exe 迁移
+    ROOT_DIR = Path(sys.executable).resolve().parent
+else:
+    ROOT_DIR = Path(__file__).resolve().parents[2]
+
+DATA_DIR = ROOT_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR = DATA_DIR / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)

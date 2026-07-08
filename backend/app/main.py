@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -26,6 +27,9 @@ app.include_router(misc.router)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # 生产模式：托管前端构建产物
-FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if getattr(sys, "frozen", False):
+    FRONTEND_DIST = Path(getattr(sys, "_MEIPASS")) / "frontend_dist"
+else:
+    FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if FRONTEND_DIST.exists():
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
