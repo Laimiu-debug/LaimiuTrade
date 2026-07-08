@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+backend/.venv/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# 本地数据（复盘数据库、上传的截图）
+data/
+
+# 系统
+.DS_Store
+Thumbs.db

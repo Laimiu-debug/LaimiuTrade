@@ -1,0 +1,48 @@
+from sqlalchemy.orm import Session
+
+from ..models import Setting
+
+DEFAULTS: dict[str, str] = {
+    # 费率
+    "commission_rate": "0.00025",   # 佣金 万2.5
+    "commission_min": "5",          # 最低佣金
+    "stamp_tax_rate": "0.0005",     # 印花税(卖出) 万5
+    "transfer_fee_rate": "0.00001", # 过户费 十万分之一
+    # 行情
+    "tdx_path": r"D:\new_tdx\vipdoc",
+    "market_priority": "tdx,akshare,web",
+    # AI (OpenAI 兼容)
+    "ai_base_url": "",
+    "ai_api_key": "",
+    "ai_text_model": "",
+    "ai_vision_model": "",
+}
+
+
+def get_all(db: Session) -> dict[str, str]:
+    stored = {s.key: s.value for s in db.query(Setting).all()}
+    return {**DEFAULTS, **stored}
+
+
+def get(db: Session, key: str) -> str:
+    row = db.get(Setting, key)
+    if row is not None:
+        return row.value
+    return DEFAULTS.get(key, "")
+
+
+def set_many(db: Session, values: dict[str, str]) -> None:
+    for key, value in values.items():
+        row = db.get(Setting, key)
+        if row is None:
+            db.add(Setting(key=key, value=str(value)))
+        else:
+            row.value = str(value)
+    db.commit()
+
+
+def get_float(db: Session, key: str) -> float:
+    try:
+        return float(get(db, key))
+    except ValueError:
+        return float(DEFAULTS.get(key, "0"))
