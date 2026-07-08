@@ -25,7 +25,7 @@ export default function App() {
       <aside className="sidebar no-print">
         <div className="brand">
           <h1 className="brand-title">LaimiuTrade</h1>
-          <div className="brand-sub">五十波段 · 复利之路</div>
+          <div className="brand-sub">波段复利 · 长期主义</div>
         </div>
         {NAV.map(item => (
           <NavLink

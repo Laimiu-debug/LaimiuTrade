@@ -38,6 +38,19 @@ export default function Settings() {
         <button className="primary" onClick={save}>保存全部设置</button>
       </div>
 
+      <div className="card" style={{ marginBottom: 18 }}>
+        <h3 className="card-title">胜利目标</h3>
+        <div className="grid grid-2">
+          <label className="field"><span>节点总数（默认 50）</span>
+            <input type="number" min="1" value={values.node_count ?? ''} onChange={e => set('node_count', e.target.value)} />
+          </label>
+          <label className="field"><span>每节点涨幅 %（默认 30，即净值阶梯 ×1.3ⁿ）</span>
+            <input type="number" min="1" value={values.wave_pct ?? ''} onChange={e => set('wave_pct', e.target.value)} />
+          </label>
+        </div>
+        <div className="muted">修改后所有节点判定、进度条、耗时统计立即按新目标重算，历史数据不受影响。</div>
+      </div>
+
       <div className="grid grid-2">
         <div className="card">
           <h3 className="card-title">交易费率</h3>

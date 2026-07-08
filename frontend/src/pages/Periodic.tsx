@@ -7,7 +7,7 @@ interface PeriodAuto {
   end_nav: number; trade_count: number; closed_rounds: number; round_pnl: number; win_rounds: number;
 }
 interface WeeklyData { year: number; week: number; right_things: string; wrong_things: string; next_strategy: string; auto: PeriodAuto }
-interface MonthlyData { year: number; month: number; system_iteration: string; next_goal: string; auto: PeriodAuto; node_state: { lit_count: number; nav: number } }
+interface MonthlyData { year: number; month: number; system_iteration: string; next_goal: string; auto: PeriodAuto; node_state: { lit_count: number; node_count: number; nav: number } }
 
 function isoWeek(d: Date): [number, number] {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -117,7 +117,7 @@ export default function Periodic() {
           <>
             <AutoStats auto={monthly.auto} />
             <div className="muted" style={{ marginBottom: 14 }}>
-              当前节点进度：已点亮 {monthly.node_state.lit_count} / 50 · 当前净值 {monthly.node_state.nav.toFixed(4)}
+              当前节点进度：已点亮 {monthly.node_state.lit_count} / {monthly.node_state.node_count} · 当前净值 {monthly.node_state.nav.toFixed(4)}
             </div>
             <div className="grid grid-2">
               <label className="field"><span>体系迭代 · 这个月对交易系统的思考与修正</span>

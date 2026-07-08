@@ -251,14 +251,19 @@ def get_monthly(year: int, month: int, db: Session = Depends(get_db)):
     row = db.query(MonthlyReview).filter_by(year=year, month=month).first()
     start = date(year, month, 1)
     end = (date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)) - timedelta(days=1)
+    rate, count = netvalue.node_config(db)
     points = netvalue.build_series(db)
-    state = netvalue.current_state(points)
+    state = netvalue.current_state(points, rate, count)
     return {
         "year": year, "month": month,
         "system_iteration": row.system_iteration if row else "",
         "next_goal": row.next_goal if row else "",
         "auto": _period_auto(db, start, end),
-        "node_state": {"lit_count": state["lit_count"], "nav": state["nav"]},
+        "node_state": {
+            "lit_count": state["lit_count"],
+            "node_count": state["node_count"],
+            "nav": state["nav"],
+        },
     }
 
 

@@ -108,12 +108,13 @@ def market_daily(code: str, limit: int = 120, db: Session = Depends(get_db)):
 
 @router.get("/stats/overview")
 def overview(db: Session = Depends(get_db)):
+    rate, count = netvalue.node_config(db)
     points = netvalue.build_series(db)
     rounds = rounds_svc.build_rounds(db)
-    events = netvalue.compute_node_events(points)
+    events = netvalue.compute_node_events(points, rate, count)
     start_day = points[0].day if points else None
     return {
-        "state": netvalue.current_state(points),
+        "state": netvalue.current_state(points, rate, count),
         "curve": stats.nav_curve(points),
         "max_drawdown_pct": stats.max_drawdown(points),
         "weekly_returns": stats.period_returns(points, stats.week_key),

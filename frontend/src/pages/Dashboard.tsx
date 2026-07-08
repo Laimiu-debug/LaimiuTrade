@@ -52,7 +52,7 @@ export default function Dashboard() {
             note={state ? `份额 ${fmtMoney(state.shares)}` : ''} />
         </div>
         <div className="card">
-          <Stat label="已点亮节点" gold value={state ? `${state.lit_count} / 50` : '—'}
+          <Stat label="已点亮节点" gold value={state ? `${state.lit_count} / ${state.node_count}` : '—'}
             note={state?.next_level ? `下一节点 Lv.${state.next_level}` : '全部达成'} />
         </div>
         <div className="card">
@@ -62,7 +62,34 @@ export default function Dashboard() {
       </div>
 
       <div className="card" style={{ marginTop: 18 }}>
-        <h3 className="card-title">五十节点征途<span className="muted">净值阶梯 ×1.3ⁿ · 回撤即熄灭</span></h3>
+        <h3 className="card-title">
+          节点征途
+          <span className="muted">
+            {state ? `每节点 +${state.wave_pct}% · 共 ${state.node_count} 节 · 回撤即熄灭` : '回撤即熄灭'}
+          </span>
+        </h3>
+        {state && (
+          <div className="progress-block">
+            <div className="progress-labels">
+              <span>总进度</span>
+              <span><span className="strong">{state.lit_count}</span> / {state.node_count} · {((state.lit_count / state.node_count) * 100).toFixed(1)}%</span>
+            </div>
+            <div className="progress-track">
+              <div className="progress-fill" style={{ width: `${Math.max(0.5, (state.lit_count / state.node_count) * 100)}%` }} />
+            </div>
+            {state.next_level != null && (
+              <div style={{ marginTop: 10 }}>
+                <div className="progress-labels">
+                  <span>当前段 · 冲击 Lv.{state.next_level}（净值 {state.next_threshold?.toFixed(3)}）</span>
+                  <span className="strong">{state.leg_progress_pct.toFixed(1)}%</span>
+                </div>
+                <div className="progress-track">
+                  <div className="progress-fill slim" style={{ width: `${Math.max(0.5, state.leg_progress_pct)}%` }} />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {nodes ? (
           <div className="node-grid">
             {nodes.nodes.map(n => {

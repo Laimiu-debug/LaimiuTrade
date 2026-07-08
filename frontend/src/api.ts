@@ -39,6 +39,9 @@ export interface NavState {
   next_assets_target?: number | null;
   max_nav: number;
   drawdown_pct: number;
+  node_count: number;
+  wave_pct: number;
+  leg_progress_pct: number;
 }
 
 export interface CurvePoint {

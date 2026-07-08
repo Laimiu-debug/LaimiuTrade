@@ -14,9 +14,10 @@ from datetime import date
 from sqlalchemy.orm import Session
 
 from ..models import CapitalFlow, Snapshot
+from . import settings as settings_svc
 
-WAVE_RATE = 1.3
-NODE_COUNT = 50
+DEFAULT_WAVE_RATE = 1.3
+DEFAULT_NODE_COUNT = 50
 
 
 @dataclass
@@ -27,8 +28,18 @@ class NavPoint:
     shares: float
 
 
-def node_threshold(level: int) -> float:
-    return WAVE_RATE ** level
+def node_config(db: Session) -> tuple[float, int]:
+    """返回 (每节点净值倍率, 节点总数)，来自可配置设置。"""
+    pct = settings_svc.get_float(db, "wave_pct")
+    count = int(settings_svc.get_float(db, "node_count"))
+    rate = 1 + pct / 100 if pct > 0 else DEFAULT_WAVE_RATE
+    if count <= 0:
+        count = DEFAULT_NODE_COUNT
+    return rate, count
+
+
+def node_threshold(level: int, rate: float = DEFAULT_WAVE_RATE) -> float:
+    return rate ** level
 
 
 def build_series(db: Session) -> list[NavPoint]:
@@ -61,16 +72,22 @@ def build_series(db: Session) -> list[NavPoint]:
     return points
 
 
-def current_state(points: list[NavPoint]) -> dict:
+def current_state(
+    points: list[NavPoint],
+    rate: float = DEFAULT_WAVE_RATE,
+    count: int = DEFAULT_NODE_COUNT,
+) -> dict:
     if not points:
         return {
             "nav": 1.0, "assets": 0.0, "shares": 0.0, "day": None,
             "lit_levels": [], "lit_count": 0, "next_level": 1,
-            "next_threshold": node_threshold(1), "next_gap_pct": None,
+            "next_threshold": node_threshold(1, rate), "next_gap_pct": None,
             "max_nav": 1.0, "drawdown_pct": 0.0,
+            "node_count": count, "wave_pct": round((rate - 1) * 100, 4),
+            "leg_progress_pct": 0.0,
         }
     last = points[-1]
-    lit = [n for n in range(1, NODE_COUNT + 1) if last.nav >= node_threshold(n)]
+    lit = [n for n in range(1, count + 1) if last.nav >= node_threshold(n, rate)]
     next_level = (lit[-1] + 1) if lit else 1
     max_nav = max(p.nav for p in points)
     drawdown = (last.nav / max_nav - 1) * 100 if max_nav > 0 else 0.0
@@ -83,29 +100,39 @@ def current_state(points: list[NavPoint]) -> dict:
         "lit_count": len(lit),
         "max_nav": max_nav,
         "drawdown_pct": drawdown,
+        "node_count": count,
+        "wave_pct": round((rate - 1) * 100, 4),
     }
-    if next_level <= NODE_COUNT:
-        threshold = node_threshold(next_level)
+    if next_level <= count:
+        threshold = node_threshold(next_level, rate)
+        prev_threshold = node_threshold(next_level - 1, rate)  # level 0 -> 1.0
+        leg = (last.nav - prev_threshold) / (threshold - prev_threshold) * 100
         state["next_level"] = next_level
         state["next_threshold"] = threshold
         state["next_gap_pct"] = (threshold / last.nav - 1) * 100
         state["next_assets_target"] = threshold * last.shares
+        state["leg_progress_pct"] = max(0.0, min(100.0, leg))
     else:
         state["next_level"] = None
         state["next_threshold"] = None
         state["next_gap_pct"] = None
         state["next_assets_target"] = None
+        state["leg_progress_pct"] = 100.0
     return state
 
 
-def compute_node_events(points: list[NavPoint]) -> list[dict]:
+def compute_node_events(
+    points: list[NavPoint],
+    rate: float = DEFAULT_WAVE_RATE,
+    count: int = DEFAULT_NODE_COUNT,
+) -> list[dict]:
     """遍历净值序列，产出节点点亮/熄灭事件史。"""
     events: list[dict] = []
     lit: set[int] = set()
     prev_nav = 1.0
     for p in points:
-        for level in range(1, NODE_COUNT + 1):
-            threshold = node_threshold(level)
+        for level in range(1, count + 1):
+            threshold = node_threshold(level, rate)
             if prev_nav < threshold <= p.nav and level not in lit:
                 lit.add(level)
                 events.append({"level": level, "kind": "lit", "date": p.day, "nav": p.nav})

@@ -93,29 +93,31 @@ def delete_snapshot(snap_id: int, db: Session = Depends(get_db)):
 
 @router.get("/nav")
 def nav_series(db: Session = Depends(get_db)):
+    rate, count = netvalue.node_config(db)
     points = netvalue.build_series(db)
     return {
         "curve": stats.nav_curve(points),
-        "state": netvalue.current_state(points),
+        "state": netvalue.current_state(points, rate, count),
         "max_drawdown_pct": stats.max_drawdown(points),
     }
 
 
 @router.get("/nodes")
 def nodes(db: Session = Depends(get_db)):
+    rate, count = netvalue.node_config(db)
     points = netvalue.build_series(db)
-    state = netvalue.current_state(points)
-    events = netvalue.compute_node_events(points)
+    state = netvalue.current_state(points, rate, count)
+    events = netvalue.compute_node_events(points, rate, count)
     start_day = points[0].day if points else None
     shares = state["shares"]
     node_list = [
         {
             "level": n,
-            "threshold": netvalue.node_threshold(n),
-            "assets_equiv": round(netvalue.node_threshold(n) * shares, 2) if shares else None,
+            "threshold": netvalue.node_threshold(n, rate),
+            "assets_equiv": round(netvalue.node_threshold(n, rate) * shares, 2) if shares else None,
             "lit": n in state["lit_levels"],
         }
-        for n in range(1, netvalue.NODE_COUNT + 1)
+        for n in range(1, count + 1)
     ]
     return {
         "state": state,

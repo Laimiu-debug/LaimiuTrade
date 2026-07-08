@@ -3,6 +3,9 @@ from sqlalchemy.orm import Session
 from ..models import Setting
 
 DEFAULTS: dict[str, str] = {
+    # 目标系统
+    "wave_pct": "30",    # 每节点涨幅 %
+    "node_count": "50",  # 胜利节点总数
     # 费率
     "commission_rate": "0.00025",   # 佣金 万2.5
     "commission_min": "5",          # 最低佣金
