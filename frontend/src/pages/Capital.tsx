@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtMoney, today } from '../api';
 import { Empty, useToast, DateInput, NumberInput, Select } from '../components';
 
@@ -10,6 +10,12 @@ const FLOW_KIND_OPTIONS = [
 
 interface FlowRow { id: number; flow_date: string; kind: string; amount: number; note: string }
 interface SnapRow { id: number; snap_date: string; total_assets: number; note: string }
+interface AccountImportPreview {
+  snap_date: string;
+  total_assets: number | null;
+  available_cash: number | null;
+  positions: { code?: string; name?: string; qty?: number; market_value?: number }[];
+}
 
 const KIND_LABEL: Record<string, string> = { initial: '初始资金', deposit: '入金', withdraw: '出金' };
 
@@ -17,6 +23,10 @@ export default function Capital() {
   const toast = useToast();
   const [flows, setFlows] = useState<FlowRow[]>([]);
   const [snaps, setSnaps] = useState<SnapRow[]>([]);
+  const [estimating, setEstimating] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [importPreview, setImportPreview] = useState<AccountImportPreview | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const [flowForm, setFlowForm] = useState({ flow_date: today(), kind: 'deposit', amount: '', note: '' });
   const [snapForm, setSnapForm] = useState({ snap_date: today(), total_assets: '', note: '' });
@@ -45,9 +55,63 @@ export default function Capital() {
     try {
       await api.post('/api/capital/snapshots', { snap_date: snapForm.snap_date, total_assets: assets, note: snapForm.note });
       setSnapForm({ ...snapForm, total_assets: '', note: '' });
+      setImportPreview(null);
       toast('快照已保存');
       reload();
     } catch (e) { toast(String(e)); }
+  };
+
+  const estimateFromTrades = async () => {
+    setEstimating(true);
+    try {
+      const est = await api.get<{
+        ok: boolean;
+        message?: string;
+        snap_date?: string;
+        total_assets?: number;
+        cash?: number;
+        position_value?: number;
+        reason?: string;
+      }>(`/api/capital/estimate?date=${snapForm.snap_date}`);
+      if (!est.ok) {
+        toast(est.message ?? '无法推算，请先录入初始资金');
+        return;
+      }
+      setSnapForm({
+        ...snapForm,
+        snap_date: est.snap_date ?? snapForm.snap_date,
+        total_assets: String(est.total_assets ?? ''),
+        note: est.message ?? '',
+      });
+      toast(`已填入推算值：现金 ¥${fmtMoney(est.cash ?? 0)} + 持仓 ¥${fmtMoney(est.position_value ?? 0)}`);
+    } catch (e) { toast(String(e)); } finally {
+      setEstimating(false);
+    }
+  };
+
+  const uploadAccountScreenshot = async (file: File) => {
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const result = await api.post<AccountImportPreview>('/api/capital/import/screenshot', fd);
+      setImportPreview(result);
+      if (result.total_assets != null) {
+        setSnapForm({
+          ...snapForm,
+          snap_date: result.snap_date,
+          total_assets: String(result.total_assets),
+          note: '持仓截图识别',
+        });
+        toast(`识别到总资产 ¥${fmtMoney(result.total_assets)}，请核对后保存`);
+      } else {
+        setSnapForm({ ...snapForm, snap_date: result.snap_date, note: '持仓截图识别' });
+        toast(`识别到 ${result.positions.length} 条持仓，请手动填写总资产或从交易推算`);
+      }
+    } catch (e) { toast(String(e)); } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
   };
 
   const hasInitial = flows.some(f => f.kind === 'initial');
@@ -63,13 +127,25 @@ export default function Capital() {
 
       {!hasInitial && (
         <div className="alert" style={{ marginBottom: 18 }}>
-          尚未录入初始资金。请先添加一笔「初始资金」流水，再录入当日总资产快照，净值系统即启动。
+          尚未录入初始资金。请先添加一笔「初始资金」流水；之后可上传持仓截图识别总资产，或根据交易流水自动推算。
         </div>
       )}
 
       <div className="grid grid-2">
         <div className="card">
-          <h3 className="card-title">每日收盘快照</h3>
+          <div className="page-head" style={{ marginBottom: 12 }}>
+            <h3 className="card-title" style={{ margin: 0 }}>每日收盘快照</h3>
+            <div className="row">
+              <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }}
+                onChange={e => e.target.files?.[0] && uploadAccountScreenshot(e.target.files[0])} />
+              <button onClick={() => fileRef.current?.click()} disabled={uploading}>
+                {uploading ? '识别中…' : '上传持仓截图'}
+              </button>
+              <button onClick={estimateFromTrades} disabled={estimating || !hasInitial}>
+                {estimating ? '推算中…' : '从交易推算'}
+              </button>
+            </div>
+          </div>
           <div className="row" style={{ marginBottom: 16 }}>
             <DateInput value={snapForm.snap_date} onChange={v => setSnapForm({ ...snapForm, snap_date: v })} style={{ width: 150 }} />
             <NumberInput placeholder="收盘总资产（现金+持仓市值）" style={{ flex: 1, minWidth: 140 }}
@@ -77,7 +153,25 @@ export default function Capital() {
               onChange={v => setSnapForm({ ...snapForm, total_assets: v })} />
             <button className="primary" onClick={addSnap}>保存</button>
           </div>
-          {snaps.length === 0 ? <Empty text="每个交易日收盘后，记一笔总资产" /> : (
+          {importPreview && importPreview.positions.length > 0 && (
+            <div style={{ marginBottom: 16, padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 'var(--radius-sm)' }}>
+              <div className="muted" style={{ marginBottom: 8, fontSize: 12 }}>截图识别持仓（{importPreview.positions.length} 条）</div>
+              <table>
+                <thead><tr><th>代码</th><th>名称</th><th style={{ textAlign: 'right' }}>数量</th><th style={{ textAlign: 'right' }}>市值</th></tr></thead>
+                <tbody>
+                  {importPreview.positions.slice(0, 8).map((p, i) => (
+                    <tr key={i}>
+                      <td className="mono">{p.code ?? '—'}</td>
+                      <td>{p.name ?? '—'}</td>
+                      <td style={{ textAlign: 'right' }} className="mono">{p.qty ?? '—'}</td>
+                      <td style={{ textAlign: 'right' }} className="mono">{p.market_value != null ? `¥${fmtMoney(p.market_value)}` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {snaps.length === 0 ? <Empty text="收盘后上传持仓截图，或从交易推算总资产" /> : (
             <table>
               <thead><tr><th>日期</th><th style={{ textAlign: 'right' }}>总资产</th><th /></tr></thead>
               <tbody>

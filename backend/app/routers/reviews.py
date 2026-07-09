@@ -9,9 +9,103 @@ from sqlalchemy.orm import Session
 from ..database import UPLOAD_DIR, get_db
 from ..models import DailyReview, MonthlyReview, Snapshot, Trade, WeeklyReview
 from ..services import ai as ai_svc
+from ..services import market as market_svc
 from ..services import netvalue, rounds as rounds_svc, stats
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
+
+
+def _merge_trade_score_items(trade_scores: dict, items: list) -> dict:
+    for item in items:
+        trade_id = item.get("id")
+        if trade_id is None:
+            continue
+        key = str(trade_id)
+        entry: dict = trade_scores.get(key) or {}
+        summary = item.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            entry["_summary"] = {"comment": summary.strip()}
+        for dim, val in (item.get("scores") or {}).items():
+            if dim not in ai_svc.SCORE_DIMENSIONS:
+                continue
+            if not isinstance(val, dict):
+                continue
+            dim_entry = entry.get(dim) or {}
+            dim_entry["ai"] = val.get("score")
+            dim_entry["comment"] = val.get("comment", "")
+            if dim_entry.get("final") is None:
+                dim_entry["final"] = val.get("score")
+            entry[dim] = dim_entry
+        trade_scores[key] = entry
+    return trade_scores
+
+
+def _aggregate_daily_scores(trade_scores: dict) -> dict:
+    """从已打分交易汇总整日 6 维度概览。"""
+    daily: dict = {}
+    for dim in ai_svc.SCORE_DIMENSIONS:
+        collected: list[dict] = []
+        for entry in trade_scores.values():
+            if not isinstance(entry, dict):
+                continue
+            dim_entry = entry.get(dim)
+            if isinstance(dim_entry, dict) and dim_entry.get("ai") is not None:
+                collected.append(dim_entry)
+        if not collected:
+            continue
+        avg = round(sum(d["ai"] for d in collected if d.get("ai") is not None) / len(collected))
+        comments = [d.get("comment", "").strip() for d in collected if d.get("comment")]
+        daily[dim] = {
+            "ai": avg,
+            "final": avg,
+            "comment": " ".join(comments[:2]),
+        }
+    return daily
+
+
+def _plan_from_prev(db: Session, day: date) -> str:
+    prev = (
+        db.query(DailyReview)
+        .filter(DailyReview.review_date < day)
+        .order_by(DailyReview.review_date.desc())
+        .first()
+    )
+    if not prev:
+        return ""
+    plan_parts = [prev.next_market_forecast, prev.next_position_plan, prev.next_risk_plan]
+    watchlist = json.loads(prev.next_watchlist or "[]")
+    if watchlist:
+        plan_parts.append("关注标的: " + "; ".join(
+            f"{w.get('name', '')}({w.get('code', '')}) {w.get('condition', '')} -> {w.get('action', '')}"
+            for w in watchlist
+        ))
+    return "\n".join(p for p in plan_parts if p)
+
+
+def _run_ai_score(db: Session, row: DailyReview, day: date, trade_ids: list[int] | None) -> dict:
+    try:
+        result = ai_svc.score_trades(db, day, {
+            "market_observation": row.market_observation,
+            "decision_review": row.decision_review,
+            "mistakes": row.mistakes,
+            "plan": _plan_from_prev(db, day),
+        }, trade_ids=trade_ids)
+    except ai_svc.AIUnavailable as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"AI 打分失败: {exc}") from exc
+
+    trade_scores = json.loads(row.trade_scores or "{}")
+    _merge_trade_score_items(trade_scores, result.get("trades") or [])
+    scores = _aggregate_daily_scores(trade_scores)
+
+    if trade_ids is None and result.get("daily_summary"):
+        row.ai_summary = result.get("daily_summary", "")
+
+    row.trade_scores = json.dumps(trade_scores, ensure_ascii=False)
+    row.scores = json.dumps(scores, ensure_ascii=False)
+    db.commit()
+    return {"trade_scores": trade_scores, "scores": scores, "summary": row.ai_summary}
 
 
 def _daily_dict(r: DailyReview) -> dict:
@@ -22,6 +116,7 @@ def _daily_dict(r: DailyReview) -> dict:
         "mistakes": r.mistakes,
         "images": json.loads(r.images or "[]"),
         "scores": json.loads(r.scores or "{}"),
+        "trade_scores": json.loads(getattr(r, "trade_scores", None) or "{}"),
         "ai_summary": r.ai_summary,
         "next_market_forecast": r.next_market_forecast,
         "next_watchlist": json.loads(r.next_watchlist or "[]"),
@@ -43,6 +138,8 @@ def _get_or_create_daily(db: Session, day: date) -> DailyReview:
 def get_daily(day: date, db: Session = Depends(get_db)):
     row = db.query(DailyReview).filter(DailyReview.review_date == day).first()
     data = _daily_dict(row) if row else _daily_dict(DailyReview(review_date=day))
+    if "trade_scores" not in data:
+        data["trade_scores"] = {}
     trades = db.query(Trade).filter(Trade.trade_date == day).order_by(Trade.id).all()
     data["trades"] = [
         {"id": t.id, "code": t.code, "name": t.name, "side": t.side,
@@ -60,6 +157,7 @@ class DailyIn(BaseModel):
     decision_review: str = ""
     mistakes: str = ""
     scores: dict = {}
+    trade_scores: dict = {}
     next_market_forecast: str = ""
     next_watchlist: list = []
     next_position_plan: str = ""
@@ -73,6 +171,7 @@ def save_daily(day: date, body: DailyIn, db: Session = Depends(get_db)):
     row.decision_review = body.decision_review
     row.mistakes = body.mistakes
     row.scores = json.dumps(body.scores, ensure_ascii=False)
+    row.trade_scores = json.dumps(body.trade_scores, ensure_ascii=False)
     row.next_market_forecast = body.next_market_forecast
     row.next_watchlist = json.dumps(body.next_watchlist, ensure_ascii=False)
     row.next_position_plan = body.next_position_plan
@@ -113,48 +212,58 @@ def remove_image(day: date, url: str, db: Session = Depends(get_db)):
 @router.post("/daily/{day}/ai-score")
 def ai_score(day: date, db: Session = Depends(get_db)):
     row = _get_or_create_daily(db, day)
-    prev = (
-        db.query(DailyReview)
-        .filter(DailyReview.review_date < day)
-        .order_by(DailyReview.review_date.desc())
-        .first()
-    )
-    plan = ""
-    if prev:
-        plan_parts = [prev.next_market_forecast, prev.next_position_plan, prev.next_risk_plan]
-        watchlist = json.loads(prev.next_watchlist or "[]")
-        if watchlist:
-            plan_parts.append("关注标的: " + "; ".join(
-                f"{w.get('name', '')}({w.get('code', '')}) {w.get('condition', '')} -> {w.get('action', '')}"
-                for w in watchlist
-            ))
-        plan = "\n".join(p for p in plan_parts if p)
+    return _run_ai_score(db, row, day, trade_ids=None)
+
+
+class AiScoreIn(BaseModel):
+    trade_ids: list[int] = []
+
+
+@router.post("/daily/{day}/ai-score/batch")
+def ai_score_batch(day: date, body: AiScoreIn, db: Session = Depends(get_db)):
+    row = _get_or_create_daily(db, day)
+    if not body.trade_ids:
+        raise HTTPException(400, "请指定要分析的交易")
+    return _run_ai_score(db, row, day, trade_ids=body.trade_ids)
+
+
+@router.post("/daily/{day}/ai-score/{trade_id}")
+def ai_score_one(day: date, trade_id: int, db: Session = Depends(get_db)):
+    trade = db.get(Trade, trade_id)
+    if trade is None or trade.trade_date != day:
+        raise HTTPException(404, "交易不存在或不属于该日")
+    row = _get_or_create_daily(db, day)
+    return _run_ai_score(db, row, day, trade_ids=[trade_id])
+
+
+@router.post("/daily/{day}/ai-review")
+def ai_review(day: date, db: Session = Depends(get_db)):
+    row = _get_or_create_daily(db, day)
     try:
-        result = ai_svc.score_review(db, day, {
+        result = ai_svc.generate_daily_review(db, day, {
             "market_observation": row.market_observation,
             "decision_review": row.decision_review,
             "mistakes": row.mistakes,
-            "plan": plan,
         })
     except ai_svc.AIUnavailable as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(502, f"AI 打分失败: {exc}") from exc
+        raise HTTPException(502, f"AI 复盘失败: {exc}") from exc
 
-    scores = json.loads(row.scores or "{}")
-    for dim, item in (result.get("scores") or {}).items():
-        if dim not in ai_svc.SCORE_DIMENSIONS:
-            continue
-        entry = scores.get(dim) or {}
-        entry["ai"] = item.get("score")
-        entry["comment"] = item.get("comment", "")
-        if entry.get("final") is None:
-            entry["final"] = item.get("score")
-        scores[dim] = entry
-    row.scores = json.dumps(scores, ensure_ascii=False)
-    row.ai_summary = result.get("summary", "")
+    for field in ("market_observation", "decision_review", "mistakes",
+                  "next_market_forecast", "next_position_plan", "next_risk_plan"):
+        val = result.get(field)
+        if isinstance(val, str) and val.strip():
+            setattr(row, field, val.strip())
     db.commit()
-    return {"scores": scores, "summary": row.ai_summary}
+    return {
+        "market_observation": row.market_observation,
+        "decision_review": row.decision_review,
+        "mistakes": row.mistakes,
+        "next_market_forecast": row.next_market_forecast,
+        "next_position_plan": row.next_position_plan,
+        "next_risk_plan": row.next_risk_plan,
+    }
 
 
 @router.get("/daily")
@@ -209,6 +318,75 @@ def _period_auto(db: Session, start: date, end: date) -> dict:
     }
 
 
+def _build_period_context(db: Session, start: date, end: date) -> dict:
+    trades = (
+        db.query(Trade)
+        .filter(Trade.trade_date >= start, Trade.trade_date <= end)
+        .order_by(Trade.trade_date, Trade.id)
+        .all()
+    )
+    trade_lines = [
+        f"{t.trade_date} {'买入' if t.side == 'buy' else '卖出'} {t.name or t.code}({t.code}) "
+        f"{t.qty}股 @ {t.price}"
+        for t in trades
+    ]
+
+    daily_rows = (
+        db.query(DailyReview)
+        .filter(DailyReview.review_date >= start, DailyReview.review_date <= end)
+        .order_by(DailyReview.review_date)
+        .all()
+    )
+    daily_excerpts: list[str] = []
+    for row in daily_rows:
+        parts: list[str] = []
+        if row.market_observation.strip():
+            parts.append(f"观察:{row.market_observation.strip()[:100]}")
+        if row.decision_review.strip():
+            parts.append(f"决策:{row.decision_review.strip()[:100]}")
+        if row.mistakes.strip():
+            parts.append(f"教训:{row.mistakes.strip()[:100]}")
+        if row.ai_summary.strip():
+            parts.append(f"总评:{row.ai_summary.strip()[:100]}")
+        if parts:
+            daily_excerpts.append(f"{row.review_date}: " + " | ".join(parts))
+
+    weekly_excerpts: list[str] = []
+    for wrow in db.query(WeeklyReview).all():
+        w_start, w_end = _week_range(wrow.year, wrow.week)
+        if w_start > end or w_end < start:
+            continue
+        chunks = [wrow.right_things.strip(), wrow.wrong_things.strip(), wrow.next_strategy.strip()]
+        if any(chunks):
+            weekly_excerpts.append(
+                f"{wrow.year}W{wrow.week}: "
+                f"对={wrow.right_things.strip()[:80] or '—'} | "
+                f"错={wrow.wrong_things.strip()[:80] or '—'}"
+            )
+
+    all_rounds = rounds_svc.build_rounds(db)
+    closed_in = [
+        r for r in all_rounds
+        if r["status"] == "closed" and r["end_date"] and start.isoformat() <= r["end_date"] <= end.isoformat()
+    ]
+    round_lines = [
+        f"{r['name']}({r['code']}) {r['start_date']}→{r['end_date']} "
+        f"盈亏 {r['pnl']}元 ({r['pnl_pct']}%)"
+        for r in closed_in
+    ]
+
+    codes = sorted({t.code for t in trades})
+    market_text = market_svc.market_context_text(db, ["000001.SH", "399001.SZ", *codes[:5]], end)
+
+    return {
+        "trade_lines": trade_lines,
+        "daily_excerpts": daily_excerpts,
+        "weekly_excerpts": weekly_excerpts,
+        "round_lines": round_lines,
+        "market_text": market_text,
+    }
+
+
 class WeeklyIn(BaseModel):
     right_things: str = ""
     wrong_things: str = ""
@@ -239,6 +417,39 @@ def save_weekly(year: int, week: int, body: WeeklyIn, db: Session = Depends(get_
     row.next_strategy = body.next_strategy
     db.commit()
     return {"ok": True}
+
+
+@router.post("/weekly/{year}/{week}/ai-review")
+def ai_weekly_review(year: int, week: int, db: Session = Depends(get_db)):
+    row = db.query(WeeklyReview).filter_by(year=year, week=week).first()
+    if row is None:
+        row = WeeklyReview(year=year, week=week)
+        db.add(row)
+        db.flush()
+    start, end = _week_range(year, week)
+    auto = _period_auto(db, start, end)
+    context = _build_period_context(db, start, end)
+    try:
+        result = ai_svc.generate_weekly_review(db, year, week, start, end, auto, context, {
+            "right_things": row.right_things,
+            "wrong_things": row.wrong_things,
+            "next_strategy": row.next_strategy,
+        })
+    except ai_svc.AIUnavailable as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"AI 周复盘失败: {exc}") from exc
+
+    for field in ("right_things", "wrong_things", "next_strategy"):
+        val = result.get(field)
+        if isinstance(val, str) and val.strip():
+            setattr(row, field, val.strip())
+    db.commit()
+    return {
+        "right_things": row.right_things,
+        "wrong_things": row.wrong_things,
+        "next_strategy": row.next_strategy,
+    }
 
 
 class MonthlyIn(BaseModel):
@@ -277,3 +488,45 @@ def save_monthly(year: int, month: int, body: MonthlyIn, db: Session = Depends(g
     row.next_goal = body.next_goal
     db.commit()
     return {"ok": True}
+
+
+@router.post("/monthly/{year}/{month}/ai-review")
+def ai_monthly_review(year: int, month: int, db: Session = Depends(get_db)):
+    row = db.query(MonthlyReview).filter_by(year=year, month=month).first()
+    if row is None:
+        row = MonthlyReview(year=year, month=month)
+        db.add(row)
+        db.flush()
+    start = date(year, month, 1)
+    end = (date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)) - timedelta(days=1)
+    auto = _period_auto(db, start, end)
+    context = _build_period_context(db, start, end)
+    rate, count = netvalue.node_config(db)
+    points = netvalue.build_series(db)
+    state = netvalue.current_state(points, rate, count)
+    node_state = {
+        "lit_count": state["lit_count"],
+        "node_count": state["node_count"],
+        "nav": state["nav"],
+    }
+    try:
+        result = ai_svc.generate_monthly_review(
+            db, year, month, start, end, auto, node_state, context, {
+                "system_iteration": row.system_iteration,
+                "next_goal": row.next_goal,
+            },
+        )
+    except ai_svc.AIUnavailable as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"AI 月复盘失败: {exc}") from exc
+
+    for field in ("system_iteration", "next_goal"):
+        val = result.get(field)
+        if isinstance(val, str) and val.strip():
+            setattr(row, field, val.strip())
+    db.commit()
+    return {
+        "system_iteration": row.system_iteration,
+        "next_goal": row.next_goal,
+    }

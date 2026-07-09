@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
@@ -46,6 +46,14 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 class Base(DeclarativeBase):
     pass
+
+
+def ensure_schema() -> None:
+    """SQLite 轻量迁移：为已有库补列。"""
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(daily_reviews)"))}
+        if "trade_scores" not in cols:
+            conn.execute(text("ALTER TABLE daily_reviews ADD COLUMN trade_scores TEXT DEFAULT '{}'"))
 
 
 def get_db():

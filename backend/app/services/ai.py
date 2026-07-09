@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Snapshot, Trade
 from . import market as market_svc
+from . import netvalue
 from . import settings as settings_svc
 
 SCORE_DIMENSIONS = {
@@ -107,14 +108,112 @@ def _extract_json(text: str):
     return json.loads(text[start:])
 
 
-def score_review(db: Session, review_date: date, review_texts: dict[str, str]) -> dict:
-    trades = db.query(Trade).filter(Trade.trade_date == review_date).all()
-    trade_lines = [
-        f"- {t.side == 'buy' and '买入' or '卖出'} {t.name or t.code}({t.code}) "
-        f"{t.qty}股 @ {t.price}元"
-        for t in trades
-    ] or ["（当日无交易）"]
+SCORE_DIMENSIONS = {
+    "position": "仓位控制",
+    "drawdown": "回撤控制",
+    "discipline": "计划执行力",
+    "entry": "买点质量",
+    "exit": "卖点质量",
+    "emotion": "情绪管理",
+}
 
+TRADE_SCORE_DIMENSIONS = {
+    "timing": "时机质量",
+    "discipline": "计划执行力",
+    "emotion": "情绪管理",
+}
+
+
+def _trade_lines_for(trades: list) -> list[dict]:
+    return [
+        {
+            "id": t.id,
+            "side": t.side,
+            "line": (
+                f"#{t.id} {('买入' if t.side == 'buy' else '卖出')} {t.name or t.code}({t.code}) "
+                f"{t.qty}股 @ {t.price}元，费用 "
+                f"{t.fee_commission + t.fee_stamp + t.fee_transfer:.2f}元"
+            ),
+        }
+        for t in trades
+    ]
+
+
+def score_trades(
+    db: Session,
+    review_date: date,
+    review_texts: dict[str, str],
+    trade_ids: list[int] | None = None,
+) -> dict:
+    """对指定交易（或当日全部）逐条 6 维度打分。"""
+    ctx = _review_context(db, review_date)
+    trades = ctx["trades"]
+    if trade_ids is not None:
+        wanted = set(trade_ids)
+        trades = [t for t in trades if t.id in wanted]
+    if not trades:
+        return {"trades": [], "daily_summary": ""}
+
+    trade_lines = _trade_lines_for(trades)
+    other_lines = [
+        t["line"] for t in ctx["trade_lines"] if t["id"] not in {x.id for x in trades}
+    ]
+    dims_desc = "、".join(f"{k}({v})" for k, v in SCORE_DIMENSIONS.items())
+    trade_block = "\n".join(t["line"] for t in trade_lines)
+    other_block = "\n".join(other_lines) if other_lines else "（无）"
+    scope = "以下指定交易" if trade_ids else "以下每一笔交易"
+
+    prompt = f"""你是一位严格的 A 股交易教练。请对{scope}**分别**按 6 个维度打分（0-10 整数），每条维度附 25-40 字点评；并给每笔交易一句整体总评。
+
+## 日期
+{review_date.isoformat()}
+
+## 当日行情
+{ctx["market_text"]}
+
+## 账户
+{ctx["asset_line"]}
+
+## 本次需评价的交易（id 必须原样返回）
+{trade_block}
+
+## 当日其他交易（仅供仓位/节奏参考，勿重复评价）
+{other_block}
+
+## 交易者自述（若有）
+盘面观察：{review_texts.get('market_observation') or '（未填写）'}
+决策复盘：{review_texts.get('decision_review') or '（未填写）'}
+错误教训：{review_texts.get('mistakes') or '（未填写）'}
+前一日计划对照：{review_texts.get('plan') or '（无）'}
+
+## 评分维度
+{dims_desc}
+- 买入侧重 entry/position；卖出侧重 exit/position
+- 不适用的维度可给 5 分并注明「不适用」
+
+## 输出要求
+严格输出 JSON：
+{{"trades": [{{"id": 交易ID, "summary": "此笔整体40字内", "scores": {{{", ".join(f'"{k}": {{"score": 0, "comment": ""}}' for k in SCORE_DIMENSIONS)}}}}}, ...], "daily_summary": "当日整体80字内（仅评价本次涉及的交易）"}}
+
+必须为「本次需评价的交易」中每笔都输出一项。"""
+
+    content = _chat(db, [{"role": "user", "content": prompt}])
+    return _extract_json(content)
+
+
+def score_review(
+    db: Session,
+    review_date: date,
+    review_texts: dict[str, str],
+    trade_ids: list[int] | None = None,
+) -> dict:
+    """兼容旧调用：等同 score_trades。"""
+    return score_trades(db, review_date, review_texts, trade_ids)
+
+
+def _review_context(db: Session, review_date: date) -> dict:
+    trades = db.query(Trade).filter(Trade.trade_date == review_date).order_by(Trade.id).all()
+    trade_lines = _trade_lines_for(trades)
     snap = db.query(Snapshot).filter(Snapshot.snap_date == review_date).first()
     prev_snap = (
         db.query(Snapshot)
@@ -128,35 +227,192 @@ def score_review(db: Session, review_date: date, review_texts: dict[str, str]) -
         if prev_snap and prev_snap.total_assets:
             change = (snap.total_assets / prev_snap.total_assets - 1) * 100
             asset_line += f"，较前一交易日 {change:+.2f}%"
-
     codes = sorted({t.code for t in trades})
     market_text = market_svc.market_context_text(db, codes, review_date)
+    return {
+        "trades": trades,
+        "trade_lines": trade_lines,
+        "asset_line": asset_line,
+        "market_text": market_text,
+    }
 
-    dims_desc = "、".join(f"{k}({v})" for k, v in SCORE_DIMENSIONS.items())
-    prompt = f"""你是一位严格的 A 股交易教练。请根据以下信息，对交易者当日操作按 6 个维度打分（0-10 整数）并给出一句话点评，最后给出总评。
+
+def generate_daily_review(db: Session, review_date: date, review_texts: dict[str, str] | None = None) -> dict:
+    """根据交易与行情自动生成复盘正文。"""
+    review_texts = review_texts or {}
+    ctx = _review_context(db, review_date)
+    trade_block = "\n".join(t["line"] for t in ctx["trade_lines"]) or "（当日无交易）"
+    prompt = f"""你是一位 A 股波段交易教练。请根据以下客观数据，帮交易者撰写**每日复盘**草稿（中文，具体、可执行，避免空话）。
 
 ## 日期
 {review_date.isoformat()}
 
 ## 当日行情
-{market_text}
-
-## 当日交易
-{chr(10).join(trade_lines)}
+{ctx["market_text"]}
 
 ## 账户
-{asset_line}
+{ctx["asset_line"]}
 
-## 交易者自述
+## 当日交易
+{trade_block}
+
+## 交易者已写内容（可吸收、补充，勿重复啰嗦）
 盘面观察：{review_texts.get('market_observation') or '（未填写）'}
 决策复盘：{review_texts.get('decision_review') or '（未填写）'}
 错误教训：{review_texts.get('mistakes') or '（未填写）'}
-次日计划（前一日写的今日计划可对照执行力）：{review_texts.get('plan') or '（无）'}
 
 ## 输出要求
-严格输出 JSON，不要多余文字：
-{{"scores": {{{", ".join(f'"{k}": {{"score": 0, "comment": ""}}' for k in SCORE_DIMENSIONS)}}}, "summary": "总评"}}
-维度含义：{dims_desc}。当日无交易时，重点评估仓位/回撤/情绪与复盘质量，交易类维度可给中性分并注明。"""
+严格输出 JSON：
+{{
+  "market_observation": "大盘/板块/情绪，3-5句",
+  "decision_review": "逐笔或按标的梳理买卖理由与对错，4-8句",
+  "mistakes": "具体错误与改进，2-4句",
+  "next_market_forecast": "次日大盘预判，2-3句",
+  "next_position_plan": "次日仓位计划，1-2句",
+  "next_risk_plan": "风险预案，1-2句"
+}}"""
+
+    content = _chat(db, [{"role": "user", "content": prompt}])
+    return _extract_json(content)
+
+
+def generate_weekly_review(
+    db: Session,
+    year: int,
+    week: int,
+    start: date,
+    end: date,
+    auto: dict,
+    context: dict,
+    existing: dict[str, str] | None = None,
+) -> dict:
+    """生成本周复盘草稿。"""
+    existing = existing or {}
+    trade_block = "\n".join(f"- {line}" for line in context.get("trade_lines") or []) or "（本周无交易）"
+    daily_block = "\n".join(f"- {line}" for line in context.get("daily_excerpts") or []) or "（无每日复盘记录）"
+    round_block = "\n".join(f"- {line}" for line in context.get("round_lines") or []) or "（本周无清仓回合）"
+    win_rate = (
+        round(auto["win_rounds"] / auto["closed_rounds"] * 100, 1)
+        if auto.get("closed_rounds", 0) > 0 else None
+    )
+
+    prompt = f"""你是一位 A 股波段交易教练，擅长从「行为与体系」角度做周度复盘。请根据以下数据，撰写**本周复盘**草稿。
+
+## 周期
+{year} 年第 {week} 周（{start.isoformat()} ~ {end.isoformat()}）
+
+## 账户与交易绩效
+- 区间收益率：{auto.get('return_pct')}%
+- 区间最大回撤：{auto.get('max_drawdown_pct')}%
+- 期末净值：{auto.get('end_nav')}
+- 交易笔数：{auto.get('trade_count')}
+- 清仓回合：{auto.get('closed_rounds')}（盈利 {auto.get('win_rounds')} 笔{ f"，胜率 {win_rate}%" if win_rate is not None else ""}）
+- 回合合计盈亏：{auto.get('round_pnl')} 元
+
+## 本周行情背景
+{context.get('market_text') or '（行情数据不可用）'}
+
+## 本周交易流水
+{trade_block}
+
+## 本周已清仓回合
+{round_block}
+
+## 本周每日复盘摘要
+{daily_block}
+
+## 交易者已写内容（可吸收、补充，避免重复）
+本周做对：{existing.get('right_things') or '（未填写）'}
+本周做错：{existing.get('wrong_things') or '（未填写）'}
+下周策略：{existing.get('next_strategy') or '（未填写）'}
+
+## 写作要求
+1. 聚焦「可复制的正确行为」与「需杜绝的错误模式」，不要复述流水账
+2. 结合胜率、回撤、交易频率，判断本周是「乱动」「踏空」还是「节奏良好」
+3. 下周策略要具体：仓位基调（几成仓）、主攻方向（板块/风格）、一条纪律红线
+4. 语气直接、具体，禁止空话套话
+
+## 输出要求
+严格输出 JSON：
+{{
+  "right_things": "4-6句，分点叙述也可",
+  "wrong_things": "4-6句，指出具体行为问题",
+  "next_strategy": "3-5句，含仓位+方向+纪律"
+}}"""
+
+    content = _chat(db, [{"role": "user", "content": prompt}])
+    return _extract_json(content)
+
+
+def generate_monthly_review(
+    db: Session,
+    year: int,
+    month: int,
+    start: date,
+    end: date,
+    auto: dict,
+    node_state: dict,
+    context: dict,
+    existing: dict[str, str] | None = None,
+) -> dict:
+    """生成本月复盘草稿。"""
+    existing = existing or {}
+    trade_block = "\n".join(f"- {line}" for line in context.get("trade_lines") or []) or "（本月无交易）"
+    daily_block = "\n".join(f"- {line}" for line in context.get("daily_excerpts") or []) or "（无每日复盘记录）"
+    weekly_block = "\n".join(f"- {line}" for line in context.get("weekly_excerpts") or []) or "（无周复盘记录）"
+    round_block = "\n".join(f"- {line}" for line in context.get("round_lines") or []) or "（本月无清仓回合）"
+    rate, node_count = netvalue.node_config(db)
+    wave_note = f"节点倍率 {round((rate - 1) * 100, 1)}%，共 {node_count} 个节点"
+
+    prompt = f"""你是一位 A 股波段交易教练，擅长交易系统迭代与长期复利思维。请根据以下数据，撰写**本月复盘**草稿。
+
+## 周期
+{year} 年 {month} 月（{start.isoformat()} ~ {end.isoformat()}）
+
+## 账户与交易绩效
+- 区间收益率：{auto.get('return_pct')}%
+- 区间最大回撤：{auto.get('max_drawdown_pct')}%
+- 期末净值：{auto.get('end_nav')}
+- 交易笔数：{auto.get('trade_count')}
+- 清仓回合：{auto.get('closed_rounds')}（盈利 {auto.get('win_rounds')} 笔）
+- 回合合计盈亏：{auto.get('round_pnl')} 元
+
+## 节点征途
+- 已点亮节点：{node_state.get('lit_count')} / {node_state.get('node_count')}
+- 当前净值：{node_state.get('nav')}
+{('- ' + wave_note) if wave_note else ''}
+
+## 本月行情背景
+{context.get('market_text') or '（行情数据不可用）'}
+
+## 本月交易流水（摘要）
+{trade_block}
+
+## 本月清仓回合
+{round_block}
+
+## 本月每日复盘摘要
+{daily_block}
+
+## 本月周复盘摘要
+{weekly_block}
+
+## 交易者已写内容（可吸收、补充，避免重复）
+体系迭代：{existing.get('system_iteration') or '（未填写）'}
+下月目标：{existing.get('next_goal') or '（未填写）'}
+
+## 写作要求
+1. **体系迭代**：哪些规则有效、哪些需修改/删除/新增；用本月数据举证，不要泛泛而谈
+2. **下月目标**：至少包含 1 个行为目标（如「减少无效交易至 X 笔以内」）+ 1 个结果目标（如「净值目标/节点进度」）
+3. 若本月回撤大或胜率低，优先反思 process 而非归因运气
+4. 联系「50 节点复利」长期视角，避免短线赌徒心态
+
+## 输出要求
+严格输出 JSON：
+{{
+  "system_iteration": "5-8句，含具体规则层面的修正建议",
+  "next_goal": "3-5句，行为目标+结果目标"
+}}"""
 
     content = _chat(db, [{"role": "user", "content": prompt}])
     return _extract_json(content)
@@ -182,3 +438,43 @@ def parse_screenshot(db: Session, image_bytes: bytes, mime: str) -> list[dict]:
     content = _chat(db, messages, vision=True)
     data = _extract_json(content)
     return data if isinstance(data, list) else []
+
+
+ACCOUNT_SNAPSHOT_PROMPT = """这是券商账户的持仓/资产总览截图（如同花顺「资产」或「持仓」页）。
+请提取账户信息，严格输出 JSON 对象，不要多余文字：
+{
+  "snap_date": "YYYY-MM-DD 或 null",
+  "total_assets": 总资产数字或 null,
+  "available_cash": 可用资金或 null,
+  "positions": [
+    {"code": "6位股票代码", "name": "名称", "qty": 持仓数量, "price": 成本价或现价, "market_value": 市值或 null}
+  ]
+}
+注意：
+- total_assets 优先取「总资产」「账户资产」「资产总值」等字段
+- 若截图只有持仓列表没有总资产，positions 仍要完整输出，total_assets 可填 null
+- 识别不到任何有效信息则 {"snap_date": null, "total_assets": null, "available_cash": null, "positions": []}"""
+
+
+def parse_account_screenshot(db: Session, image_bytes: bytes, mime: str) -> dict:
+    b64 = base64.b64encode(image_bytes).decode()
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": ACCOUNT_SNAPSHOT_PROMPT},
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+        ],
+    }]
+    content = _chat(db, messages, vision=True)
+    data = _extract_json(content)
+    if not isinstance(data, dict):
+        return {"snap_date": None, "total_assets": None, "available_cash": None, "positions": []}
+    positions = data.get("positions")
+    if not isinstance(positions, list):
+        positions = []
+    return {
+        "snap_date": data.get("snap_date"),
+        "total_assets": data.get("total_assets"),
+        "available_cash": data.get("available_cash"),
+        "positions": positions,
+    }

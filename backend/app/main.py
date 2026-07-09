@@ -5,10 +5,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .database import UPLOAD_DIR, Base, engine
+from .database import UPLOAD_DIR, Base, engine, ensure_schema
 from .routers import capital, misc, reviews, trades
 
 Base.metadata.create_all(bind=engine)
+ensure_schema()
 
 app = FastAPI(title="Trading MS", version="0.1.0")
 

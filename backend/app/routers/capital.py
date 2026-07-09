@@ -1,11 +1,13 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import CapitalFlow, Snapshot
+from ..services import ai as ai_svc
+from ..services import capital_estimate as capital_est_svc
 from ..services import netvalue, stats
 
 router = APIRouter(prefix="/api/capital", tags=["capital"])
@@ -89,6 +91,70 @@ def delete_snapshot(snap_id: int, db: Session = Depends(get_db)):
     db.delete(row)
     db.commit()
     return {"ok": True}
+
+
+@router.get("/estimate")
+def estimate_assets(day: date = Query(..., alias="date"), db: Session = Depends(get_db)):
+    """根据出入金与交易流水，估算某日收盘总资产。"""
+    return capital_est_svc.estimate_snapshot(db, day)
+
+
+@router.post("/import/screenshot")
+async def import_account_screenshot(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """识别持仓/资产截图，返回总资产与持仓明细供确认。"""
+    content = await file.read()
+    mime = file.content_type or "image/png"
+    try:
+        parsed = ai_svc.parse_account_screenshot(db, content, mime)
+    except ai_svc.AIUnavailable as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"识别失败: {exc}") from exc
+
+    snap_date = parsed.get("snap_date")
+    if isinstance(snap_date, str) and snap_date:
+        try:
+            snap_day = date.fromisoformat(snap_date[:10])
+        except ValueError:
+            snap_day = date.today()
+    else:
+        snap_day = date.today()
+
+    total_assets = parsed.get("total_assets")
+    if total_assets is not None:
+        try:
+            total_assets = float(total_assets)
+        except (TypeError, ValueError):
+            total_assets = None
+
+    positions = parsed.get("positions") or []
+    if total_assets is None and positions:
+        mv_sum = 0.0
+        for p in positions:
+            if not isinstance(p, dict):
+                continue
+            mv = p.get("market_value")
+            if mv is not None:
+                try:
+                    mv_sum += float(mv)
+                except (TypeError, ValueError):
+                    pass
+        cash = parsed.get("available_cash")
+        if cash is not None:
+            try:
+                mv_sum += float(cash)
+            except (TypeError, ValueError):
+                pass
+        if mv_sum > 0:
+            total_assets = round(mv_sum, 2)
+
+    return {
+        "snap_date": snap_day.isoformat(),
+        "total_assets": total_assets,
+        "available_cash": parsed.get("available_cash"),
+        "positions": positions,
+        "recognized": len(positions) + (1 if total_assets is not None else 0),
+    }
 
 
 @router.get("/nav")

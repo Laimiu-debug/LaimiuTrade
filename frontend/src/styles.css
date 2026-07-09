@@ -724,6 +724,68 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
 .score-dot:hover { border-color: var(--gold); }
 .score-dot.on { background: var(--gold); border-color: var(--gold); }
 .score-comment { flex: 1; font-size: 12px; color: var(--text-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.score-row-wrap {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  padding: 10px 0;
+}
+.score-row-wrap .score-dots { flex-shrink: 0; }
+.score-row-wrap .tag { flex-shrink: 0; }
+.score-comment-wrap {
+  flex: 1 1 100%;
+  width: 100%;
+  margin: 4px 0 0 94px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-2);
+  white-space: normal;
+  word-break: break-word;
+}
+@media (max-width: 640px) {
+  .score-comment-wrap { margin-left: 0; }
+}
+
+/* 逐条交易打分 */
+.trade-score-list { display: flex; flex-direction: column; gap: 12px; }
+.trade-score-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+}
+.trade-score-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.trade-score-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.trade-score-name { font-size: 14px; font-weight: 500; }
+.trade-score-numbers { font-size: 12px; }
+.trade-score-body { display: flex; flex-direction: column; gap: 4px; }
+.trade-score-summary {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  background: var(--gold-dim);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.score-print-value { display: none; font-size: 12px; color: var(--gold-bright); margin-left: 4px; }
+.trade-score-empty { font-size: 12px; padding: 4px 0 2px; }
+.journal-snapshot-note { margin-top: 14px; font-size: 12px; }
+.journal-day-summary {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--gold-dim);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--text-2);
+}
 
 .divider { height: 1px; background: var(--border); margin: 18px 0; border: none; }
 
@@ -803,18 +865,156 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
 
 .img-thumb { width: 130px; height: 90px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--border); cursor: pointer; }
 
-/* ============ 打印（PDF 导出） ============ */
+/* ============ 打印（PDF 导出）——统一为品牌暖色浅色，与 logo / 默认主题一致 ============ */
 @media print {
-  body { background: #fff; color: #1a1a1a; font-size: 12px; }
+  :root,
+  :root[data-theme="dark"] {
+    --bg: #f5f0e6;
+    --bg-deep: #ece5d6;
+    --surface: #ffffff;
+    --surface-2: #fbf7ef;
+    --surface-3: #f1e9da;
+    --border: #e6dcc6;
+    --border-strong: #d2c4a3;
+    --text: #3a322a;
+    --text-2: #7a6f5e;
+    --text-3: #a89c86;
+    --gold: #e8a87c;
+    --gold-bright: #d98a52;
+    --gold-dim: rgba(232, 168, 124, 0.22);
+    --up: #ff6b6b;
+    --down: #4ecdc4;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  @page {
+    margin: 14mm 16mm;
+    background: #f5f0e6;
+  }
+
+  body {
+    background: var(--bg) !important;
+    color: var(--text) !important;
+    font-size: 12px;
+  }
+
   .sidebar, .no-print, button, .toast { display: none !important; }
-  .main { padding: 0; max-width: none; }
-  .card { border: 1px solid #ddd; background: #fff; break-inside: avoid; }
-  .card-title { color: #666; }
-  .stat-value, .page-title { color: #1a1a1a; }
-  .stat-value.gold { color: #8a6d3b; }
-  input, textarea, select { border: none; background: #fff; color: #1a1a1a; padding: 2px 0; }
-  textarea { min-height: 0; }
-  .node-cell.lit { background: #f6efe0; color: #8a6d3b; }
+
+  .main {
+    padding: 0;
+    max-width: none;
+    background: var(--bg) !important;
+  }
+
+  .card {
+    border: 1px solid var(--border-strong) !important;
+    background: var(--surface) !important;
+    break-inside: avoid;
+    box-shadow: none;
+    margin-bottom: 14px;
+    border-radius: var(--radius-md);
+  }
+
+  .card-title,
+  .print-header h3 {
+    color: var(--gold-bright) !important;
+    font-family: var(--font-display);
+    letter-spacing: 0.04em;
+  }
+
+  .page-title,
+  .stat-value,
+  .trade-score-name {
+    color: var(--text) !important;
+  }
+
+  .stat-value.gold { color: var(--gold-bright) !important; }
+
+  .muted,
+  .trade-score-numbers,
+  .journal-snapshot-note,
+  .trade-score-dim-label {
+    color: var(--text-2) !important;
+  }
+
+  .trade-score-card {
+    background: var(--surface-2) !important;
+    border: 1px solid var(--border) !important;
+  }
+
+  .trade-score-summary {
+    background: var(--gold-dim) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border);
+  }
+  .score-comment-wrap { color: var(--text-2) !important; margin-left: 0 !important; }
+
+  .journal-day-summary {
+    background: var(--gold-dim) !important;
+    color: var(--text-2) !important;
+    border: 1px solid var(--border);
+  }
+
+  input, textarea, select {
+    border: none !important;
+    background: transparent !important;
+    color: var(--text) !important;
+    padding: 2px 0;
+    resize: none;
+  }
+
+  textarea { min-height: 0; white-space: pre-wrap; }
+
+  table { border-color: var(--border) !important; }
+
+  th {
+    color: var(--text-2) !important;
+    background: var(--surface-3) !important;
+    border-color: var(--border) !important;
+  }
+
+  td {
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+  }
+
+  .tag {
+    border: 1px solid var(--border-strong) !important;
+    background: var(--surface-2) !important;
+    color: var(--text-2) !important;
+  }
+
+  .tag.gold {
+    color: var(--gold-bright) !important;
+    background: var(--gold-dim) !important;
+    border-color: var(--gold) !important;
+  }
+
+  .score-dot { display: none !important; }
+
+  .score-print-value {
+    display: inline !important;
+    color: var(--gold-bright) !important;
+    font-weight: 600;
+  }
+
+  .node-cell.lit {
+    background: var(--gold-dim) !important;
+    color: var(--gold-bright) !important;
+  }
+
   .print-only { display: block !important; }
+
+  .print-header h3 { margin: 0 0 16px; }
+
+  .pos { color: var(--up) !important; }
+  .neg { color: var(--down) !important; }
+  a { color: var(--gold-bright) !important; }
+
+  .field span { color: var(--text-2) !important; }
 }
 .print-only { display: none; }

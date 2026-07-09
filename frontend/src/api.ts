@@ -114,6 +114,7 @@ export interface DailyReview {
   mistakes: string;
   images: string[];
   scores: Record<string, ScoreEntry>;
+  trade_scores: Record<string, Record<string, ScoreEntry>>;
   ai_summary: string;
   next_market_forecast: string;
   next_watchlist: WatchItem[];
@@ -162,6 +163,14 @@ export const SCORE_DIMS: Record<string, string> = {
   exit: '卖点质量',
   emotion: '情绪管理',
 };
+
+export const TRADE_SCORE_DIMS: Record<string, string> = {
+  timing: '时机质量',
+  discipline: '计划执行力',
+  emotion: '情绪管理',
+};
+
+export const tradeTimingLabel = (side: string) => (side === 'sell' ? '卖点质量' : '买点质量');
 
 export const fmtMoney = (v: number | null | undefined) =>
   v === null || v === undefined ? '—' : v.toLocaleString('zh-CN', { maximumFractionDigits: 2 });

@@ -8,6 +8,13 @@ const SIDE_OPTIONS = [
 ];
 
 interface PendingRow { id: number; trade_date: string; code: string; name: string; side: string; price: number; qty: number }
+interface SnapshotSuggestion {
+  snap_date: string;
+  total_assets: number;
+  cash: number;
+  position_value: number;
+  message?: string;
+}
 
 export default function Trades() {
   const toast = useToast();
@@ -16,6 +23,8 @@ export default function Trades() {
   const [rounds, setRounds] = useState<{ rounds: RoundRow[]; stats: RoundStats } | null>(null);
   const [pending, setPending] = useState<PendingRow[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [confirmingAll, setConfirmingAll] = useState(false);
+  const [snapshotPrompt, setSnapshotPrompt] = useState<SnapshotSuggestion | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [form, setForm] = useState({
@@ -66,6 +75,37 @@ export default function Trades() {
     } catch (e) { toast(String(e)); }
   };
 
+  const confirmAllPending = async () => {
+    setConfirmingAll(true);
+    try {
+      const result = await api.post<{
+        confirmed: number;
+        skipped: number;
+        snapshot_suggestion: SnapshotSuggestion | null;
+      }>('/api/trades/pending/confirm-all');
+      toast(`已确认入库 ${result.confirmed} 条${result.skipped ? `，跳过 ${result.skipped} 条` : ''}`);
+      reload();
+      if (result.snapshot_suggestion) {
+        setSnapshotPrompt(result.snapshot_suggestion);
+      }
+    } catch (e) { toast(String(e)); } finally {
+      setConfirmingAll(false);
+    }
+  };
+
+  const saveSuggestedSnapshot = async () => {
+    if (!snapshotPrompt) return;
+    try {
+      await api.post('/api/capital/snapshots', {
+        snap_date: snapshotPrompt.snap_date,
+        total_assets: snapshotPrompt.total_assets,
+        note: '交易确认后自动推算',
+      });
+      toast('今日快照已保存到资金账本');
+      setSnapshotPrompt(null);
+    } catch (e) { toast(String(e)); }
+  };
+
   return (
     <div className="fade-in">
       <div className="page-head">
@@ -84,7 +124,14 @@ export default function Trades() {
 
       {pending.length > 0 && (
         <div className="card" style={{ marginBottom: 18, borderColor: 'rgba(212,175,106,0.4)' }}>
-          <h3 className="card-title">待确认（截图识别结果，请核对后入库）</h3>
+          <div className="page-head" style={{ marginBottom: 12 }}>
+            <h3 className="card-title" style={{ margin: 0 }}>待确认（截图识别结果，请核对后入库）</h3>
+            <div className="row">
+              <button className="primary" onClick={confirmAllPending} disabled={confirmingAll}>
+                {confirmingAll ? '确认中…' : `全部确认入库（${pending.length}）`}
+              </button>
+            </div>
+          </div>
           <table>
             <thead><tr><th>日期</th><th>代码</th><th>名称</th><th>方向</th><th>价格</th><th>数量</th><th /></tr></thead>
             <tbody>
@@ -101,6 +148,23 @@ export default function Trades() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {snapshotPrompt && (
+        <div className="card" style={{ marginBottom: 18, borderColor: 'rgba(212,175,106,0.55)' }}>
+          <h3 className="card-title">同步资金账本快照？</h3>
+          <p className="muted" style={{ margin: '0 0 12px' }}>
+            {snapshotPrompt.message ?? '根据已确认交易推算'} · {snapshotPrompt.snap_date}
+          </p>
+          <div className="row" style={{ marginBottom: 12 }}>
+            <span className="mono">总资产 ¥{fmtMoney(snapshotPrompt.total_assets)}</span>
+            <span className="muted">现金 ¥{fmtMoney(snapshotPrompt.cash)} · 持仓 ¥{fmtMoney(snapshotPrompt.position_value)}</span>
+          </div>
+          <div className="row">
+            <button className="primary" onClick={saveSuggestedSnapshot}>保存到资金账本</button>
+            <button className="ghost" onClick={() => setSnapshotPrompt(null)}>稍后手动填写</button>
+          </div>
         </div>
       )}
 

@@ -3,7 +3,8 @@ import { NavLink, Route, Routes } from 'react-router-dom';
 import { api } from './api';
 import Dashboard from './pages/Dashboard';
 import Journal from './pages/Journal';
-import Periodic from './pages/Periodic';
+import WeeklyReview from './pages/WeeklyReview';
+import MonthlyReview from './pages/MonthlyReview';
 import Trades from './pages/Trades';
 import Capital from './pages/Capital';
 import Stats from './pages/Stats';
@@ -21,7 +22,8 @@ function applyTheme(t: Theme) {
 const NAV = [
   { to: '/', label: '总览', icon: 'M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z' },
   { to: '/journal', label: '每日复盘', icon: 'M4 4h16v16H4zM8 2v4M16 2v4M4 10h16' },
-  { to: '/periodic', label: '周·月复盘', icon: 'M12 8v4l3 3M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
+  { to: '/weekly', label: '周复盘', icon: 'M12 8v4l3 3M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
+  { to: '/monthly', label: '月复盘', icon: 'M4 4h16v16H4zM8 2v4M16 2v4M4 10h16M8 14h8M8 18h5' },
   { to: '/trades', label: '交易记录', icon: 'M3 17l6-6 4 4 8-8M17 7h4v4' },
   { to: '/capital', label: '资金账本', icon: 'M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6' },
   { to: '/stats', label: '统计分析', icon: 'M18 20V10M12 20V4M6 20v-6' },
@@ -111,7 +113,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/journal" element={<Journal />} />
-          <Route path="/periodic" element={<Periodic />} />
+          <Route path="/weekly" element={<WeeklyReview />} />
+          <Route path="/monthly" element={<MonthlyReview />} />
           <Route path="/trades" element={<Trades />} />
           <Route path="/capital" element={<Capital />} />
           <Route path="/stats" element={<Stats />} />

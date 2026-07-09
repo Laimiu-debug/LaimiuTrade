@@ -73,6 +73,7 @@ class DailyReview(Base):
     images: Mapped[str] = mapped_column(Text, default="[]")  # JSON: [path, ...]
     # 打分: JSON {dim: {"ai": int|null, "final": int|null, "comment": str}}
     scores: Mapped[str] = mapped_column(Text, default="{}")
+    trade_scores: Mapped[str] = mapped_column(Text, default="{}")  # { trade_id: { dim: {ai, final, comment} } }
     ai_summary: Mapped[str] = mapped_column(Text, default="")
     # 次日预研
     next_market_forecast: Mapped[str] = mapped_column(Text, default="")

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import PendingTrade, Trade
 from ..services import ai as ai_svc
+from ..services import capital_estimate as capital_est_svc
 from ..services import fees as fees_svc
 from ..services import rounds as rounds_svc
 
@@ -153,11 +154,7 @@ class PendingConfirm(BaseModel):
     qty: int
 
 
-@router.post("/pending/{pending_id}/confirm")
-def confirm_pending(pending_id: int, body: PendingConfirm, db: Session = Depends(get_db)):
-    row = db.get(PendingTrade, pending_id)
-    if row is None:
-        raise HTTPException(404, "待确认记录不存在")
+def _confirm_pending_row(db: Session, row: PendingTrade, body: PendingConfirm) -> None:
     if body.side not in ("buy", "sell") or body.price <= 0 or body.qty <= 0:
         raise HTTPException(400, "数据不合法")
     fees = fees_svc.compute_fees(db, body.side, body.price, body.qty)
@@ -166,6 +163,47 @@ def confirm_pending(pending_id: int, body: PendingConfirm, db: Session = Depends
         side=body.side, price=body.price, qty=body.qty, source="import", **fees,
     ))
     db.delete(row)
+
+
+@router.post("/pending/confirm-all")
+def confirm_all_pending(db: Session = Depends(get_db)):
+    rows = db.query(PendingTrade).order_by(PendingTrade.trade_date, PendingTrade.id).all()
+    confirmed = 0
+    skipped = 0
+    latest_date: date | None = None
+    for row in rows:
+        if row.side not in ("buy", "sell") or row.price <= 0 or row.qty <= 0 or not row.code.strip():
+            skipped += 1
+            continue
+        body = PendingConfirm(
+            trade_date=row.trade_date,
+            code=row.code,
+            name=row.name,
+            side=row.side,
+            price=row.price,
+            qty=row.qty,
+        )
+        _confirm_pending_row(db, row, body)
+        confirmed += 1
+        if latest_date is None or row.trade_date > latest_date:
+            latest_date = row.trade_date
+    db.commit()
+
+    suggestion = None
+    if latest_date is not None and confirmed > 0:
+        est = capital_est_svc.estimate_snapshot(db, latest_date)
+        if est.get("ok"):
+            suggestion = est
+
+    return {"confirmed": confirmed, "skipped": skipped, "snapshot_suggestion": suggestion}
+
+
+@router.post("/pending/{pending_id}/confirm")
+def confirm_pending(pending_id: int, body: PendingConfirm, db: Session = Depends(get_db)):
+    row = db.get(PendingTrade, pending_id)
+    if row is None:
+        raise HTTPException(404, "待确认记录不存在")
+    _confirm_pending_row(db, row, body)
     db.commit()
     return {"ok": True}
 
