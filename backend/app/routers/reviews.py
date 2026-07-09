@@ -63,6 +63,24 @@ def _aggregate_daily_scores(trade_scores: dict) -> dict:
     return daily
 
 
+def _build_trade_summaries_text(db: Session, day: date, trade_scores: dict) -> str:
+    """从已保存的逐笔评分生成可读的整日 AI 总评。"""
+    trades = db.query(Trade).filter(Trade.trade_date == day).order_by(Trade.id).all()
+    lines: list[str] = []
+    for t in trades:
+        entry = trade_scores.get(str(t.id))
+        if not isinstance(entry, dict):
+            continue
+        summary_obj = entry.get("_summary")
+        summary = summary_obj.get("comment", "").strip() if isinstance(summary_obj, dict) else ""
+        if not summary:
+            continue
+        side = "买入" if t.side == "buy" else "卖出"
+        label = t.name or t.code
+        lines.append(f"· {side} {label}({t.code})：{summary}")
+    return "\n".join(lines)
+
+
 def _plan_from_prev(db: Session, day: date) -> str:
     prev = (
         db.query(DailyReview)
@@ -101,6 +119,10 @@ def _run_ai_score(db: Session, row: DailyReview, day: date, trade_ids: list[int]
 
     if trade_ids is None and result.get("daily_summary"):
         row.ai_summary = result.get("daily_summary", "")
+    else:
+        built = _build_trade_summaries_text(db, day, trade_scores)
+        if built:
+            row.ai_summary = built
 
     row.trade_scores = json.dumps(trade_scores, ensure_ascii=False)
     row.scores = json.dumps(scores, ensure_ascii=False)

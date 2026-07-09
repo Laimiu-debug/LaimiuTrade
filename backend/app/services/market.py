@@ -150,6 +150,50 @@ def _load_stock_list() -> list[dict[str, str]]:
     return _stock_cache
 
 
+def lookup_by_code(code: str) -> dict[str, str] | None:
+    """按 6 位 A 股代码精确查找。"""
+    digits = "".join(ch for ch in code if ch.isdigit())
+    if len(digits) != 6:
+        return None
+    target = digits.zfill(6)
+    for item in _load_stock_list():
+        if item["code"] == target:
+            return item
+    return None
+
+
+def resolve_stock(code: str, name: str) -> tuple[str, str]:
+    """从 OCR/手输的代码或名称尽力解析为标准 6 位代码与名称。"""
+    code = (code or "").strip()
+    name = (name or "").strip()
+    digits = "".join(ch for ch in code if ch.isdigit())
+
+    if len(digits) == 6:
+        hit = lookup_by_code(digits)
+        if hit:
+            return hit["code"], name or hit["name"]
+
+    if name:
+        hits = search_stocks(name, limit=8)
+        for hit in hits:
+            if hit["name"] == name:
+                return hit["code"], hit["name"]
+        for hit in hits:
+            if name in hit["name"] or hit["name"] in name:
+                return hit["code"], hit["name"]
+        if len(hits) == 1:
+            return hits[0]["code"], hits[0]["name"]
+
+    if digits:
+        hits = search_stocks(digits, limit=3)
+        if hits and hits[0]["code"] == digits.zfill(6):
+            return hits[0]["code"], name or hits[0]["name"]
+
+    if len(digits) == 6:
+        return digits.zfill(6), name
+    return code, name
+
+
 def search_stocks(query: str, limit: int = 12) -> list[dict[str, str]]:
     """按代码或名称模糊匹配 A 股列表。"""
     q = query.strip()

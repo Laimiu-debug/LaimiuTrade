@@ -8,6 +8,14 @@ const SIDE_OPTIONS = [
 ];
 
 interface PendingRow { id: number; trade_date: string; code: string; name: string; side: string; price: number; qty: number }
+interface PendingEdit {
+  trade_date: string;
+  code: string;
+  name: string;
+  side: string;
+  price: string;
+  qty: string;
+}
 interface SnapshotSuggestion {
   snap_date: string;
   total_assets: number;
@@ -22,6 +30,7 @@ export default function Trades() {
   const [trades, setTrades] = useState<TradeRow[]>([]);
   const [rounds, setRounds] = useState<{ rounds: RoundRow[]; stats: RoundStats } | null>(null);
   const [pending, setPending] = useState<PendingRow[]>([]);
+  const [pendingEdits, setPendingEdits] = useState<Record<number, PendingEdit>>({});
   const [uploading, setUploading] = useState(false);
   const [confirmingAll, setConfirmingAll] = useState(false);
   const [snapshotPrompt, setSnapshotPrompt] = useState<SnapshotSuggestion | null>(null);
@@ -38,6 +47,73 @@ export default function Trades() {
   }, []);
 
   useEffect(reload, [reload]);
+
+  const getPendingEdit = (p: PendingRow): PendingEdit =>
+    pendingEdits[p.id] ?? {
+      trade_date: p.trade_date,
+      code: p.code,
+      name: p.name,
+      side: p.side,
+      price: String(p.price),
+      qty: String(p.qty),
+    };
+
+  const setPendingEdit = (id: number, patch: Partial<PendingEdit>) => {
+    const base = pending.find(p => p.id === id);
+    if (!base) return;
+    setPendingEdits(prev => {
+      const fallback: PendingEdit = {
+        trade_date: base.trade_date,
+        code: base.code,
+        name: base.name,
+        side: base.side,
+        price: String(base.price),
+        qty: String(base.qty),
+      };
+      return {
+        ...prev,
+        [id]: { ...fallback, ...prev[id], ...patch },
+      };
+    });
+  };
+
+  const savePendingEdit = async (p: PendingRow) => {
+    const edit = getPendingEdit(p);
+    const price = parseFloat(edit.price);
+    const qty = parseInt(edit.qty, 10);
+    if (!edit.code.trim() || !price || !qty) {
+      toast('请填写代码、价格、数量');
+      return;
+    }
+    try {
+      await api.put(`/api/trades/pending/${p.id}`, {
+        trade_date: edit.trade_date,
+        code: edit.code,
+        name: edit.name,
+        side: edit.side,
+        price,
+        qty,
+      });
+      setPendingEdits(prev => {
+        const next = { ...prev };
+        delete next[p.id];
+        return next;
+      });
+      reload();
+    } catch (e) { toast(String(e)); }
+  };
+
+  const pendingPayload = (p: PendingRow) => {
+    const edit = getPendingEdit(p);
+    return {
+      trade_date: edit.trade_date,
+      code: edit.code,
+      name: edit.name,
+      side: edit.side,
+      price: parseFloat(edit.price),
+      qty: parseInt(edit.qty, 10),
+    };
+  };
 
   const addTrade = async () => {
     const price = parseFloat(form.price);
@@ -66,9 +142,20 @@ export default function Trades() {
   };
 
   const confirmPending = async (p: PendingRow) => {
+    const payload = pendingPayload(p);
+    if (!payload.code.trim() || !payload.price || !payload.qty) {
+      toast('请填写代码、价格、数量');
+      return;
+    }
     try {
-      await api.post(`/api/trades/pending/${p.id}/confirm`, {
-        trade_date: p.trade_date, code: p.code, name: p.name, side: p.side, price: p.price, qty: p.qty,
+      if (pendingEdits[p.id]) {
+        await api.put(`/api/trades/pending/${p.id}`, payload);
+      }
+      await api.post(`/api/trades/pending/${p.id}/confirm`, payload);
+      setPendingEdits(prev => {
+        const next = { ...prev };
+        delete next[p.id];
+        return next;
       });
       toast('已入库');
       reload();
@@ -78,12 +165,26 @@ export default function Trades() {
   const confirmAllPending = async () => {
     setConfirmingAll(true);
     try {
+      const dirty = pending.filter(p => pendingEdits[p.id]);
+      for (const p of dirty) {
+        const payload = pendingPayload(p);
+        if (payload.code.trim() && payload.price > 0 && payload.qty > 0) {
+          await api.put(`/api/trades/pending/${p.id}`, payload);
+        }
+      }
       const result = await api.post<{
         confirmed: number;
         skipped: number;
+        skipped_details?: { id: number; name: string; reason: string }[];
         snapshot_suggestion: SnapshotSuggestion | null;
       }>('/api/trades/pending/confirm-all');
-      toast(`已确认入库 ${result.confirmed} 条${result.skipped ? `，跳过 ${result.skipped} 条` : ''}`);
+      let msg = `已确认入库 ${result.confirmed} 条`;
+      if (result.skipped) {
+        const reasons = result.skipped_details?.map(s => `${s.name}: ${s.reason}`).join('；') ?? '';
+        msg += `，跳过 ${result.skipped} 条${reasons ? `（${reasons}）` : ''}`;
+      }
+      toast(msg);
+      setPendingEdits({});
       reload();
       if (result.snapshot_suggestion) {
         setSnapshotPrompt(result.snapshot_suggestion);
@@ -133,19 +234,67 @@ export default function Trades() {
             </div>
           </div>
           <table>
-            <thead><tr><th>日期</th><th>代码</th><th>名称</th><th>方向</th><th>价格</th><th>数量</th><th /></tr></thead>
+            <thead><tr><th>日期</th><th>代码/名称</th><th>方向</th><th>价格</th><th>数量</th><th /></tr></thead>
             <tbody>
-              {pending.map(p => (
-                <tr key={p.id}>
-                  <td>{p.trade_date}</td><td className="mono">{p.code}</td><td>{p.name}</td>
-                  <td><SideTag side={p.side} /></td>
-                  <td className="mono">{p.price}</td><td className="mono">{p.qty}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    <button className="ghost" onClick={() => confirmPending(p)}>确认入库</button>
-                    <button className="danger-ghost" onClick={async () => { await api.del(`/api/trades/pending/${p.id}`); reload(); }}>丢弃</button>
-                  </td>
-                </tr>
-              ))}
+              {pending.map(p => {
+                const edit = getPendingEdit(p);
+                return (
+                  <tr key={p.id}>
+                    <td>
+                      <DateInput
+                        value={edit.trade_date}
+                        onChange={v => setPendingEdit(p.id, { trade_date: v })}
+                        style={{ width: 130 }}
+                      />
+                    </td>
+                    <td>
+                      <StockPicker
+                        code={edit.code}
+                        name={edit.name}
+                        onSelect={(code, name) => setPendingEdit(p.id, { code, name })}
+                        style={{ width: 180 }}
+                      />
+                    </td>
+                    <td>
+                      <Select
+                        value={edit.side}
+                        onChange={v => setPendingEdit(p.id, { side: v })}
+                        options={SIDE_OPTIONS}
+                        style={{ width: 88 }}
+                      />
+                    </td>
+                    <td>
+                      <NumberInput
+                        style={{ width: 90 }}
+                        value={edit.price}
+                        onChange={v => setPendingEdit(p.id, { price: v })}
+                      />
+                    </td>
+                    <td>
+                      <NumberInput
+                        style={{ width: 90 }}
+                        value={edit.qty}
+                        onChange={v => setPendingEdit(p.id, { qty: v })}
+                      />
+                    </td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {pendingEdits[p.id] && (
+                        <button className="ghost" onClick={() => savePendingEdit(p)}>保存修改</button>
+                      )}
+                      <button className="ghost" onClick={() => confirmPending(p)}>确认入库</button>
+                      <button className="danger-ghost" onClick={async () => {
+                        await api.del(`/api/trades/pending/${p.id}`);
+                        setPendingEdits(prev => {
+                          const next = { ...prev };
+                          delete next[p.id];
+                          return next;
+                        });
+                        reload();
+                      }}>丢弃</button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -100,6 +100,12 @@ export interface ScoreEntry {
   comment?: string;
 }
 
+/** 单笔交易的 AI 评分包，含各维度分与整体总评 */
+export interface TradeScoreBundle {
+  _summary?: { comment?: string };
+  [dim: string]: ScoreEntry | { comment?: string } | undefined;
+}
+
 export interface WatchItem {
   code: string;
   name: string;
@@ -114,7 +120,7 @@ export interface DailyReview {
   mistakes: string;
   images: string[];
   scores: Record<string, ScoreEntry>;
-  trade_scores: Record<string, Record<string, ScoreEntry>>;
+  trade_scores: Record<string, TradeScoreBundle>;
   ai_summary: string;
   next_market_forecast: string;
   next_watchlist: WatchItem[];

@@ -15,7 +15,26 @@ from pathlib import Path
 
 def _powershell_encoded(script: str) -> list[str]:
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-    return ["powershell.exe", "-NoProfile", "-STA", "-EncodedCommand", encoded]
+    return [
+        "powershell.exe",
+        "-NoProfile",
+        "-STA",
+        "-WindowStyle",
+        "Hidden",
+        "-EncodedCommand",
+        encoded,
+    ]
+
+
+def _subprocess_hide_window() -> dict:
+    """Windows 下避免弹出黑色命令行窗口。"""
+    if sys.platform != "win32":
+        return {}
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {"creationflags": flags, "startupinfo": startupinfo}
 
 
 def _pick_folder_powershell(title: str) -> tuple[str | None, str | None]:
@@ -40,6 +59,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
             encoding="utf-8",
             errors="replace",
             timeout=120,
+            **_subprocess_hide_window(),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         return None, str(exc)
@@ -116,6 +136,8 @@ def pick_folder_dialog(title: str = "选择数据存储目录") -> str | None:
 
 
 def _helper_cmd(title: str, out_file: str) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--pick-folder", title, out_file]
     return [
         sys.executable,
         "-m",
@@ -126,18 +148,25 @@ def _helper_cmd(title: str, out_file: str) -> list[str]:
 
 
 def _pick_folder_subprocess(title: str) -> tuple[str | None, str | None]:
-    """开发模式兜底：轻量 Python 子进程。"""
-    backend_dir = Path(__file__).resolve().parents[2]
+    """独立子进程弹出对话框（API 工作线程不可直接调 GUI）。"""
+    if getattr(sys, "frozen", False):
+        cwd = str(Path(sys.executable).resolve().parent)
+        env = os.environ.copy()
+    else:
+        backend_dir = Path(__file__).resolve().parents[2]
+        cwd = str(backend_dir)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(backend_dir)
+
     fd, out_path = tempfile.mkstemp(suffix=".txt", prefix="tms-pick-")
     os.close(fd)
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(backend_dir)
     try:
         result = subprocess.run(
             _helper_cmd(title, out_path),
             timeout=120,
-            cwd=str(backend_dir),
+            cwd=cwd,
             env=env,
+            **_subprocess_hide_window(),
         )
         if result.returncode != 0:
             return None, f"子进程退出码 {result.returncode}"
@@ -155,13 +184,17 @@ def pick_folder(title: str = "选择数据存储目录") -> tuple[str | None, st
         return None, "仅支持 Windows"
 
     path, err = _pick_folder_powershell(title)
-    if path or err:
-        return path, err
+    if path:
+        return path, None
+    if not err:
+        return None, None
 
-    if not getattr(sys, "frozen", False):
-        return _pick_folder_subprocess(title)
-
-    return None, "无法打开文件夹选择框，请手动粘贴路径"
+    sub_path, sub_err = _pick_folder_subprocess(title)
+    if sub_path:
+        return sub_path, None
+    if sub_err:
+        return None, sub_err
+    return None, None
 
 
 def run_pick_folder_cli() -> None:

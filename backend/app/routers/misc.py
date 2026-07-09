@@ -230,6 +230,26 @@ def search_stocks(q: str = "", limit: int = 12):
     return market_svc.search_stocks(q, limit=min(limit, 20))
 
 
+@router.get("/market/lookup/stock")
+def lookup_stock(q: str = ""):
+    """按代码或名称精确解析单只股票，供前端自动补全。"""
+    query = q.strip()
+    if not query:
+        raise HTTPException(400, "请提供代码或名称")
+    digits = "".join(ch for ch in query if ch.isdigit())
+    if len(digits) == 6:
+        hit = market_svc.lookup_by_code(digits)
+        if hit:
+            return hit
+    code, name = market_svc.resolve_stock(query, query if not digits else "")
+    if code and len("".join(ch for ch in code if ch.isdigit())) == 6:
+        hit = market_svc.lookup_by_code(code)
+        if hit:
+            return hit
+        return {"code": code, "name": name}
+    raise HTTPException(404, "未找到匹配股票")
+
+
 @router.get("/market/{code}")
 def market_daily(code: str, limit: int = 120, db: Session = Depends(get_db)):
     return market_svc.get_daily(db, code, limit)

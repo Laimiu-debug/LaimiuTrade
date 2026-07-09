@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink, Route, Routes } from 'react-router-dom';
+import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from './api';
 import Dashboard from './pages/Dashboard';
 import Journal from './pages/Journal';
@@ -32,14 +32,17 @@ const NAV = [
 ];
 
 export default function App() {
+  const location = useLocation();
   const [theme] = useState<Theme>(() => {
     const saved = localStorage.getItem(THEME_KEY);
     // 默认浅色（米色暖熊），仅显式选过 dark 才用深色
     return saved === 'dark' ? 'dark' : 'light';
   });
+  const [navOpen, setNavOpen] = useState(false);
   const [quitState, setQuitState] = useState<'idle' | 'quitting' | 'quit'>('idle');
 
   useEffect(() => { applyTheme(theme); }, [theme]);
+  useEffect(() => { setNavOpen(false); }, [location.pathname]);
 
   const toggleTheme = () => {
     const next: Theme = theme === 'dark' ? 'light' : 'dark';
@@ -80,7 +83,13 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${navOpen ? ' sidebar-open' : ''}`}>
+      <button
+        type="button"
+        className="sidebar-backdrop no-print"
+        aria-label="关闭导航"
+        onClick={() => setNavOpen(false)}
+      />
       <aside className="sidebar no-print">
         <div className="brand">
           <div className="brand-row">
@@ -110,6 +119,14 @@ export default function App() {
         </div>
       </aside>
       <main className="main">
+        <div className="main-topbar no-print">
+          <button type="button" className="nav-toggle" aria-label="打开导航" onClick={() => setNavOpen(true)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <span className="muted">Trading MS</span>
+        </div>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/journal" element={<Journal />} />

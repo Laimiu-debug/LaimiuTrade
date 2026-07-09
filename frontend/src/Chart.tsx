@@ -36,8 +36,13 @@ export function Chart({ option, height = 280 }: { option: EChartsCoreOption; hei
     chartRef.current = echarts.init(ref.current);
     const onResize = () => chartRef.current?.resize();
     window.addEventListener('resize', onResize);
+    const ro = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => onResize())
+      : null;
+    ro?.observe(ref.current);
     return () => {
       window.removeEventListener('resize', onResize);
+      ro?.disconnect();
       chartRef.current?.dispose();
       chartRef.current = null;
     };

@@ -9,6 +9,7 @@ from ..models import PendingTrade, Trade
 from ..services import ai as ai_svc
 from ..services import capital_estimate as capital_est_svc
 from ..services import fees as fees_svc
+from ..services import market as market_svc
 from ..services import rounds as rounds_svc
 
 router = APIRouter(prefix="/api/trades", tags=["trades"])
@@ -112,14 +113,18 @@ async def import_screenshot(file: UploadFile = File(...), db: Session = Depends(
 
     created = 0
     for item in items:
-        side = item.get("side")
+        side = _normalize_side(str(item.get("side", "")))
         if side not in ("buy", "sell"):
             continue  # 持仓行(hold)不能直接变成交易
         try:
+            code, name = market_svc.resolve_stock(
+                str(item.get("code", "")).strip(),
+                str(item.get("name", "")).strip(),
+            )
             row = PendingTrade(
                 trade_date=date.fromisoformat(item["date"]) if item.get("date") else date.today(),
-                code=str(item.get("code", "")).strip(),
-                name=str(item.get("name", "")).strip(),
+                code=code,
+                name=name,
                 side=side,
                 price=float(item.get("price", 0)),
                 qty=int(item.get("qty", 0)),
@@ -154,15 +159,73 @@ class PendingConfirm(BaseModel):
     qty: int
 
 
+def _normalize_side(side: str) -> str | None:
+    s = (side or "").strip().lower()
+    if s in ("buy", "b", "买入", "证券买入", "买"):
+        return "buy"
+    if s in ("sell", "s", "卖出", "证券卖出", "卖"):
+        return "sell"
+    return None
+
+
+def _valid_code(code: str) -> bool:
+    digits = "".join(ch for ch in code if ch.isdigit())
+    return len(digits) == 6
+
+
+def _prepare_pending_body(row: PendingTrade) -> tuple[PendingConfirm | None, str | None]:
+    side = _normalize_side(row.side)
+    if side is None:
+        return None, "买卖方向无法识别"
+    if row.price <= 0:
+        return None, "价格无效"
+    if row.qty <= 0:
+        return None, "数量无效"
+    code, name = market_svc.resolve_stock(row.code, row.name)
+    if not _valid_code(code):
+        label = row.name or row.code or f"#{row.id}"
+        return None, f"{label} 缺少有效股票代码"
+    return PendingConfirm(
+        trade_date=row.trade_date,
+        code=code,
+        name=name or row.name,
+        side=side,
+        price=row.price,
+        qty=row.qty,
+    ), None
+
+
 def _confirm_pending_row(db: Session, row: PendingTrade, body: PendingConfirm) -> None:
-    if body.side not in ("buy", "sell") or body.price <= 0 or body.qty <= 0:
+    side = _normalize_side(body.side)
+    if side is None or body.price <= 0 or body.qty <= 0:
         raise HTTPException(400, "数据不合法")
-    fees = fees_svc.compute_fees(db, body.side, body.price, body.qty)
+    code, name = market_svc.resolve_stock(body.code, body.name)
+    if not _valid_code(code):
+        raise HTTPException(400, "无法识别股票代码，请从下拉列表选择或输入 6 位代码")
+    fees = fees_svc.compute_fees(db, side, body.price, body.qty)
     db.add(Trade(
-        trade_date=body.trade_date, code=body.code.strip(), name=body.name.strip(),
-        side=body.side, price=body.price, qty=body.qty, source="import", **fees,
+        trade_date=body.trade_date, code=code, name=name or body.name.strip(),
+        side=side, price=body.price, qty=body.qty, source="import", **fees,
     ))
     db.delete(row)
+
+
+@router.put("/pending/{pending_id}")
+def update_pending(pending_id: int, body: PendingConfirm, db: Session = Depends(get_db)):
+    row = db.get(PendingTrade, pending_id)
+    if row is None:
+        raise HTTPException(404, "待确认记录不存在")
+    side = _normalize_side(body.side)
+    if side is None:
+        raise HTTPException(400, "side 必须是 buy/sell")
+    row.trade_date = body.trade_date
+    row.code = body.code.strip()
+    row.name = body.name.strip()
+    row.side = side
+    row.price = body.price
+    row.qty = body.qty
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/pending/confirm-all")
@@ -170,19 +233,18 @@ def confirm_all_pending(db: Session = Depends(get_db)):
     rows = db.query(PendingTrade).order_by(PendingTrade.trade_date, PendingTrade.id).all()
     confirmed = 0
     skipped = 0
+    skipped_details: list[dict] = []
     latest_date: date | None = None
     for row in rows:
-        if row.side not in ("buy", "sell") or row.price <= 0 or row.qty <= 0 or not row.code.strip():
+        body, reason = _prepare_pending_body(row)
+        if body is None:
             skipped += 1
+            skipped_details.append({
+                "id": row.id,
+                "name": row.name or row.code or str(row.id),
+                "reason": reason or "数据不合法",
+            })
             continue
-        body = PendingConfirm(
-            trade_date=row.trade_date,
-            code=row.code,
-            name=row.name,
-            side=row.side,
-            price=row.price,
-            qty=row.qty,
-        )
         _confirm_pending_row(db, row, body)
         confirmed += 1
         if latest_date is None or row.trade_date > latest_date:
@@ -195,7 +257,12 @@ def confirm_all_pending(db: Session = Depends(get_db)):
         if est.get("ok"):
             suggestion = est
 
-    return {"confirmed": confirmed, "skipped": skipped, "snapshot_suggestion": suggestion}
+    return {
+        "confirmed": confirmed,
+        "skipped": skipped,
+        "skipped_details": skipped_details,
+        "snapshot_suggestion": suggestion,
+    }
 
 
 @router.post("/pending/{pending_id}/confirm")

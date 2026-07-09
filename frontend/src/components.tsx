@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { api, today } from './api';
 
 // ---------- Toast ----------
@@ -253,6 +254,23 @@ export function NumberInput({ value, onChange, placeholder, style, className }: 
 
 interface StockHit { code: string; name: string }
 
+function usePickerClickOutside(
+  wrapRef: RefObject<HTMLElement | null>,
+  dropdownRef: RefObject<HTMLElement | null>,
+  onClose: () => void,
+) {
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (wrapRef.current?.contains(target)) return;
+      if (dropdownRef.current?.contains(target)) return;
+      onClose();
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [wrapRef, dropdownRef, onClose]);
+}
+
 export function StockPicker({ code, name, onSelect, style }: {
   code: string;
   name: string;
@@ -263,14 +281,37 @@ export function StockPicker({ code, name, onSelect, style }: {
   const [open, setOpen] = useState(false);
   const [hits, setHits] = useState<StockHit[]>([]);
   const [loading, setLoading] = useState(false);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const editingRef = useRef(false);
+  const closeDropdown = useCallback(() => setOpen(false), []);
 
   useEffect(() => {
     if (!editingRef.current) {
       setQuery(code && name ? `${code} ${name}` : code || name || '');
     }
   }, [code, name]);
+
+  const updateDropdownPos = useCallback(() => {
+    if (!wrapRef.current) return;
+    const rect = wrapRef.current.getBoundingClientRect();
+    setDropdownPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      setDropdownPos(null);
+      return;
+    }
+    updateDropdownPos();
+    window.addEventListener('scroll', updateDropdownPos, true);
+    window.addEventListener('resize', updateDropdownPos);
+    return () => {
+      window.removeEventListener('scroll', updateDropdownPos, true);
+      window.removeEventListener('resize', updateDropdownPos);
+    };
+  }, [open, updateDropdownPos]);
 
   useEffect(() => {
     const q = query.trim();
@@ -288,13 +329,57 @@ export function StockPicker({ code, name, onSelect, style }: {
     return () => window.clearTimeout(t);
   }, [query, open]);
 
-  useClickOutside(wrapRef, () => setOpen(false));
+  usePickerClickOutside(wrapRef, dropdownRef, closeDropdown);
 
-  const pick = (hit: StockHit) => {
+  const pick = useCallback((hit: StockHit) => {
     onSelect(hit.code, hit.name);
     setQuery(`${hit.code} ${hit.name}`);
     setOpen(false);
-  };
+  }, [onSelect]);
+
+  useEffect(() => {
+    if (!open || loading || hits.length === 0) return;
+    const digits = query.replace(/\D/g, '');
+    if (digits.length !== 6) return;
+    const exact = hits.find(h => h.code === digits.padStart(6, '0'));
+    if (exact && exact.code !== code) {
+      pick(exact);
+    }
+  }, [hits, loading, open, query, code, pick]);
+
+  const resolveQuery = useCallback(async () => {
+    const q = query.trim();
+    if (!q || (code && name)) return;
+    try {
+      const hit = await api.get<StockHit>(`/api/market/lookup/stock?q=${encodeURIComponent(q)}`);
+      onSelect(hit.code, hit.name);
+      setQuery(`${hit.code} ${hit.name}`);
+    } catch {
+      // 保留用户输入，提交时再提示
+    }
+  }, [query, code, name, onSelect]);
+
+  const dropdown = open && dropdownPos && (loading || hits.length > 0 || query.trim().length >= 1)
+    ? createPortal(
+      <div
+        ref={dropdownRef}
+        className="ui-dropdown-fixed"
+        style={{ top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width }}
+      >
+        {loading && <div className="ui-dropdown-item muted">搜索中…</div>}
+        {!loading && hits.length === 0 && query.trim().length >= 1 && (
+          <div className="ui-dropdown-item muted">无匹配结果</div>
+        )}
+        {!loading && hits.map(h => (
+          <button key={h.code} type="button" className="ui-dropdown-item" onMouseDown={e => e.preventDefault()} onClick={() => pick(h)}>
+            <span className="mono">{h.code}</span>
+            <span>{h.name}</span>
+          </button>
+        ))}
+      </div>,
+      document.body,
+    )
+    : null;
 
   return (
     <div className="ui-picker stock-picker" ref={wrapRef} style={style}>
@@ -303,7 +388,10 @@ export function StockPicker({ code, name, onSelect, style }: {
         placeholder="输入代码或名称"
         value={query}
         onFocus={() => { editingRef.current = true; setOpen(true); }}
-        onBlur={() => { editingRef.current = false; }}
+        onBlur={() => {
+          editingRef.current = false;
+          window.setTimeout(() => { void resolveQuery(); }, 180);
+        }}
         onChange={e => {
           setQuery(e.target.value);
           setOpen(true);
@@ -311,20 +399,7 @@ export function StockPicker({ code, name, onSelect, style }: {
         }}
       />
       <ChevronIcon />
-      {open && (loading || hits.length > 0 || query.trim().length >= 1) && (
-        <div className="ui-dropdown">
-          {loading && <div className="ui-dropdown-item muted">搜索中…</div>}
-          {!loading && hits.length === 0 && query.trim().length >= 1 && (
-            <div className="ui-dropdown-item muted">无匹配结果</div>
-          )}
-          {!loading && hits.map(h => (
-            <button key={h.code} type="button" className="ui-dropdown-item" onMouseDown={e => e.preventDefault()} onClick={() => pick(h)}>
-              <span className="mono">{h.code}</span>
-              <span>{h.name}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      {dropdown}
     </div>
   );
 }

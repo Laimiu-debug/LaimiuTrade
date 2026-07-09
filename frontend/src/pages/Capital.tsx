@@ -14,7 +14,8 @@ interface AccountImportPreview {
   snap_date: string;
   total_assets: number | null;
   available_cash: number | null;
-  positions: { code?: string; name?: string; qty?: number; market_value?: number }[];
+  position_value?: number | null;
+  positions: { code?: string; name?: string; qty?: number; price?: number; market_value?: number }[];
 }
 
 const KIND_LABEL: Record<string, string> = { initial: '初始资金', deposit: '入金', withdraw: '出金' };
@@ -96,17 +97,20 @@ export default function Capital() {
       fd.append('file', file);
       const result = await api.post<AccountImportPreview>('/api/capital/import/screenshot', fd);
       setImportPreview(result);
-      if (result.total_assets != null) {
-        setSnapForm({
-          ...snapForm,
-          snap_date: result.snap_date,
-          total_assets: String(result.total_assets),
-          note: '持仓截图识别',
-        });
-        toast(`识别到总资产 ¥${fmtMoney(result.total_assets)}，请核对后保存`);
+      const computedTotal = (result.position_value ?? 0) + (result.available_cash ?? 0);
+      const totalHint = result.total_assets ?? (computedTotal > 0 ? computedTotal : null);
+      setSnapForm({
+        ...snapForm,
+        snap_date: result.snap_date,
+        total_assets: totalHint != null ? String(totalHint) : snapForm.total_assets,
+        note: '持仓截图识别',
+      });
+      if (totalHint != null) {
+        toast(`识别到总资产 ¥${fmtMoney(totalHint)}，请核对后保存`);
+      } else if (result.positions.length > 0) {
+        toast(`识别到 ${result.positions.length} 条持仓，请核对后保存或从交易推算`);
       } else {
-        setSnapForm({ ...snapForm, snap_date: result.snap_date, note: '持仓截图识别' });
-        toast(`识别到 ${result.positions.length} 条持仓，请手动填写总资产或从交易推算`);
+        toast('未能识别有效数据，请手动填写');
       }
     } catch (e) { toast(String(e)); } finally {
       setUploading(false);
@@ -153,22 +157,42 @@ export default function Capital() {
               onChange={v => setSnapForm({ ...snapForm, total_assets: v })} />
             <button className="primary" onClick={addSnap}>保存</button>
           </div>
-          {importPreview && importPreview.positions.length > 0 && (
+          {importPreview && (importPreview.positions.length > 0 || importPreview.total_assets != null) && (
             <div style={{ marginBottom: 16, padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 'var(--radius-sm)' }}>
-              <div className="muted" style={{ marginBottom: 8, fontSize: 12 }}>截图识别持仓（{importPreview.positions.length} 条）</div>
-              <table>
-                <thead><tr><th>代码</th><th>名称</th><th style={{ textAlign: 'right' }}>数量</th><th style={{ textAlign: 'right' }}>市值</th></tr></thead>
-                <tbody>
-                  {importPreview.positions.slice(0, 8).map((p, i) => (
-                    <tr key={i}>
-                      <td className="mono">{p.code ?? '—'}</td>
-                      <td>{p.name ?? '—'}</td>
-                      <td style={{ textAlign: 'right' }} className="mono">{p.qty ?? '—'}</td>
-                      <td style={{ textAlign: 'right' }} className="mono">{p.market_value != null ? `¥${fmtMoney(p.market_value)}` : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="row" style={{ marginBottom: 8, gap: 16, flexWrap: 'wrap' }}>
+                {importPreview.total_assets != null && (
+                  <span className="mono">总资产 ¥{fmtMoney(importPreview.total_assets)}</span>
+                )}
+                {importPreview.available_cash != null && (
+                  <span className="muted mono">可用 ¥{fmtMoney(importPreview.available_cash)}</span>
+                )}
+                {importPreview.position_value != null && (
+                  <span className="muted mono">持仓市值 ¥{fmtMoney(importPreview.position_value)}</span>
+                )}
+              </div>
+              {importPreview.positions.length > 0 && (
+                <>
+                  <div className="muted" style={{ marginBottom: 8, fontSize: 12 }}>
+                    截图识别持仓（{importPreview.positions.length} 条）
+                  </div>
+                  <div className="card-scroll">
+                    <table>
+                      <thead><tr><th>代码</th><th>名称</th><th style={{ textAlign: 'right' }}>数量</th><th style={{ textAlign: 'right' }}>现价/成本</th><th style={{ textAlign: 'right' }}>市值</th></tr></thead>
+                      <tbody>
+                        {importPreview.positions.map((p, i) => (
+                          <tr key={i}>
+                            <td className="mono">{p.code ?? '—'}</td>
+                            <td>{p.name ?? '—'}</td>
+                            <td style={{ textAlign: 'right' }} className="mono">{p.qty ?? '—'}</td>
+                            <td style={{ textAlign: 'right' }} className="mono">{p.price != null ? p.price.toFixed(3) : '—'}</td>
+                            <td style={{ textAlign: 'right' }} className="mono">{p.market_value != null ? `¥${fmtMoney(p.market_value)}` : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </div>
           )}
           {snaps.length === 0 ? <Empty text="收盘后上传持仓截图，或从交易推算总资产" /> : (

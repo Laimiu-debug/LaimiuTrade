@@ -8,9 +8,58 @@ from ..database import get_db
 from ..models import CapitalFlow, Snapshot
 from ..services import ai as ai_svc
 from ..services import capital_estimate as capital_est_svc
+from ..services import market as market_svc
 from ..services import netvalue, stats
 
 router = APIRouter(prefix="/api/capital", tags=["capital"])
+
+
+def _parse_money(val) -> float | None:
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip().replace(",", "").replace("，", "").replace("¥", "").replace("￥", "")
+    if not s:
+        return None
+    if s.endswith("万"):
+        try:
+            return float(s[:-1]) * 10000
+        except ValueError:
+            return None
+    if s.endswith("亿"):
+        try:
+            return float(s[:-1]) * 100000000
+        except ValueError:
+            return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _normalize_position(p: dict) -> dict:
+    if not isinstance(p, dict):
+        return {}
+    code = str(p.get("code") or "").strip()
+    name = str(p.get("name") or "").strip()
+    code, name = market_svc.resolve_stock(code, name)
+    qty = p.get("qty")
+    try:
+        qty_val = int(float(qty)) if qty is not None else None
+    except (TypeError, ValueError):
+        qty_val = None
+    price = _parse_money(p.get("price"))
+    market_value = _parse_money(p.get("market_value"))
+    if market_value is None and qty_val is not None and price is not None:
+        market_value = round(qty_val * price, 2)
+    return {
+        "code": code or None,
+        "name": name or None,
+        "qty": qty_val,
+        "price": price,
+        "market_value": market_value,
+    }
 
 
 class FlowIn(BaseModel):
@@ -120,38 +169,30 @@ async def import_account_screenshot(file: UploadFile = File(...), db: Session = 
     else:
         snap_day = date.today()
 
-    total_assets = parsed.get("total_assets")
-    if total_assets is not None:
-        try:
-            total_assets = float(total_assets)
-        except (TypeError, ValueError):
-            total_assets = None
+    total_assets = _parse_money(parsed.get("total_assets"))
+    available_cash = _parse_money(parsed.get("available_cash"))
 
-    positions = parsed.get("positions") or []
+    raw_positions = parsed.get("positions") or []
+    positions = [_normalize_position(p) for p in raw_positions if isinstance(p, dict)]
+    positions = [p for p in positions if p.get("code") or p.get("name")]
+
+    position_value = round(
+        sum(p["market_value"] for p in positions if p.get("market_value") is not None),
+        2,
+    )
+
     if total_assets is None and positions:
-        mv_sum = 0.0
-        for p in positions:
-            if not isinstance(p, dict):
-                continue
-            mv = p.get("market_value")
-            if mv is not None:
-                try:
-                    mv_sum += float(mv)
-                except (TypeError, ValueError):
-                    pass
-        cash = parsed.get("available_cash")
-        if cash is not None:
-            try:
-                mv_sum += float(cash)
-            except (TypeError, ValueError):
-                pass
+        mv_sum = position_value
+        if available_cash is not None:
+            mv_sum = round(mv_sum + available_cash, 2)
         if mv_sum > 0:
-            total_assets = round(mv_sum, 2)
+            total_assets = mv_sum
 
     return {
         "snap_date": snap_day.isoformat(),
         "total_assets": total_assets,
-        "available_cash": parsed.get("available_cash"),
+        "available_cash": available_cash,
+        "position_value": position_value if position_value > 0 else None,
         "positions": positions,
         "recognized": len(positions) + (1 if total_assets is not None else 0),
     }
