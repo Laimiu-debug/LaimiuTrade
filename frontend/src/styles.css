@@ -233,7 +233,9 @@ html, body {
   padding: 22px 24px;
 }
 .card > * { min-width: 0; }
+/* 纵向堆叠卡片间距；grid 内同行卡片由 gap 控制，不可再加 margin-top */
 .card + .card { margin-top: 18px; }
+.grid > .card { margin-top: 0; }
 .card-title {
   font-size: 13px;
   color: var(--text-2);

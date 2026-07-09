@@ -35,7 +35,7 @@ export function Stat({ label, value, note, gold, small, tone }: {
     <div>
       <div className="stat-label">{label}</div>
       <div className={cls}>{value}</div>
-      {note !== undefined && <div className="stat-note">{note}</div>}
+      {note != null && note !== '' && <div className="stat-note">{note}</div>}
     </div>
   );
 }
