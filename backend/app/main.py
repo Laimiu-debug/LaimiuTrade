@@ -10,7 +10,7 @@ from .routers import capital, misc, reviews, trades
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="LaimiuTrade", version="0.1.0")
+app = FastAPI(title="Trading MS", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,

@@ -26,21 +26,35 @@ class AIUnavailable(Exception):
     pass
 
 
+def _ai_config(db: Session, vision: bool = False) -> tuple[str, str, str]:
+    """返回 (base_url, api_key, model)。vision=True 取截图识别三件套，否则取打分三件套。
+
+    新 key 优先；为空则回退到旧 key（兼容存量配置）。
+    """
+    if vision:
+        base = settings_svc.get(db, "ai_ocr_base_url") or settings_svc.get(db, "ai_base_url")
+        key = settings_svc.get(db, "ai_ocr_api_key") or settings_svc.get(db, "ai_api_key")
+        model = settings_svc.get(db, "ai_ocr_vision_model") or settings_svc.get(db, "ai_vision_model")
+    else:
+        base = settings_svc.get(db, "ai_score_base_url") or settings_svc.get(db, "ai_base_url")
+        key = settings_svc.get(db, "ai_score_api_key") or settings_svc.get(db, "ai_api_key")
+        model = settings_svc.get(db, "ai_score_text_model") or settings_svc.get(db, "ai_text_model")
+    return base, key, model
+
+
 def is_configured(db: Session, vision: bool = False) -> bool:
-    base = settings_svc.get(db, "ai_base_url")
-    key = settings_svc.get(db, "ai_api_key")
-    model = settings_svc.get(db, "ai_vision_model" if vision else "ai_text_model")
+    base, key, model = _ai_config(db, vision=vision)
     return bool(base and key and model)
 
 
 def _chat(db: Session, messages: list[dict], vision: bool = False) -> str:
-    if not is_configured(db, vision=vision):
-        raise AIUnavailable("AI 未配置：请在设置中填写 Base URL、API Key 和模型名")
-    base = settings_svc.get(db, "ai_base_url").rstrip("/")
-    key = settings_svc.get(db, "ai_api_key")
-    model = settings_svc.get(db, "ai_vision_model" if vision else "ai_text_model")
+    base, key, model = _ai_config(db, vision=vision)
+    if not (base and key and model):
+        raise AIUnavailable(
+            "AI 未配置：请在设置中填写" + ("截图识别" if vision else "操作打分") + "的 Base URL、API Key 和模型名"
+        )
     resp = httpx.post(
-        f"{base}/chat/completions",
+        f"{base.rstrip('/')}/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
         json={"model": model, "messages": messages, "temperature": 0.2},
         timeout=120,

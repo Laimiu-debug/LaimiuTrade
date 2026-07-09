@@ -14,7 +14,15 @@ DEFAULTS: dict[str, str] = {
     # 行情
     "tdx_path": r"D:\new_tdx\vipdoc",
     "market_priority": "tdx,akshare,web",
-    # AI (OpenAI 兼容)
+    # AI 操作打分（文本模型）
+    "ai_score_base_url": "",
+    "ai_score_api_key": "",
+    "ai_score_text_model": "",
+    # AI 截图识别（视觉模型）
+    "ai_ocr_base_url": "",
+    "ai_ocr_api_key": "",
+    "ai_ocr_vision_model": "",
+    # —— 以下旧 key 仅作向后兼容回退（存量用户未迁移时使用）——
     "ai_base_url": "",
     "ai_api_key": "",
     "ai_text_model": "",

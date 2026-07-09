@@ -75,9 +75,9 @@ def main() -> None:
         os._exit(0)
 
     tray = pystray.Icon(
-        "LaimiuTrade",
+        "TradingMS",
         load_tray_image(),
-        "LaimiuTrade · 波段复盘志",
+        "Trading MS · 波段复盘志",
         pystray.Menu(
             pystray.MenuItem("打开界面", on_open, default=True),
             pystray.Menu.SEPARATOR,

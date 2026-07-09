@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { NavLink, Route, Routes } from 'react-router-dom';
 import { api } from './api';
 import Dashboard from './pages/Dashboard';
@@ -8,6 +9,14 @@ import Capital from './pages/Capital';
 import Stats from './pages/Stats';
 import Cards from './pages/Cards';
 import Settings from './pages/Settings';
+
+const THEME_KEY = 'lt-theme';
+type Theme = 'dark' | 'light';
+
+function applyTheme(t: Theme) {
+  if (t === 'dark') document.documentElement.dataset.theme = 'dark';
+  else delete document.documentElement.dataset.theme;
+}
 
 const NAV = [
   { to: '/', label: '总览', icon: 'M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z' },
@@ -21,20 +30,61 @@ const NAV = [
 ];
 
 export default function App() {
+  const [theme] = useState<Theme>(() => {
+    const saved = localStorage.getItem(THEME_KEY);
+    // 默认浅色（米色暖熊），仅显式选过 dark 才用深色
+    return saved === 'dark' ? 'dark' : 'light';
+  });
+  const [quitState, setQuitState] = useState<'idle' | 'quitting' | 'quit'>('idle');
+
+  useEffect(() => { applyTheme(theme); }, [theme]);
+
+  const toggleTheme = () => {
+    const next: Theme = theme === 'dark' ? 'light' : 'dark';
+    localStorage.setItem(THEME_KEY, next);
+    applyTheme(next);
+    // 图表颜色取自模块级常量，需重载页面才能刷新所有 echarts 实例
+    setTimeout(() => window.location.reload(), 30);
+  };
+
   const quitApp = async () => {
-    if (!window.confirm('确定退出 LaimiuTrade？退出后需重新双击 exe 启动。')) return;
+    if (!window.confirm('确定退出 Trading MS？退出后需重新双击 exe 启动。')) return;
+    setQuitState('quitting');
     try {
       await api.post('/api/system/shutdown');
     } catch {
       // 进程已退出时 fetch 会失败，属正常情况
     }
+    // 轮询探测后端是否已停：进程退出后任意请求都会快速失败
+    const probe = async () => {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 1200);
+        await fetch('/api/stats/overview', { signal: ctrl.signal });
+        clearTimeout(t);
+        return false; // 仍在响应
+      } catch {
+        return true; // 已停
+      }
+    };
+    const startedAt = Date.now();
+    const poll = async () => {
+      // 最多探测 6 秒
+      if (Date.now() - startedAt > 6000) { setQuitState('quit'); return; }
+      if (await probe()) { setQuitState('quit'); return; }
+      setTimeout(poll, 450);
+    };
+    setTimeout(poll, 500);
   };
 
   return (
     <div className="app-shell">
       <aside className="sidebar no-print">
         <div className="brand">
-          <h1 className="brand-title">LaimiuTrade</h1>
+          <div className="brand-row">
+            <img className="brand-logo" src="/logo.png" alt="logo" />
+            <h1 className="brand-title">Trading MS</h1>
+          </div>
           <div className="brand-sub">波段复利 · 长期主义</div>
         </div>
         {NAV.map(item => (
@@ -51,6 +101,9 @@ export default function App() {
           </NavLink>
         ))}
         <div className="nav-footer">
+          <button type="button" className="nav-theme no-print" onClick={toggleTheme} title="切换深色/浅色主题">
+            {theme === 'dark' ? '☀ 浅色' : '🌙 深色'}
+          </button>
           <div>数据存于本地 · v0.1</div>
           <button type="button" className="nav-quit no-print" onClick={quitApp}>退出程序</button>
         </div>
@@ -67,6 +120,25 @@ export default function App() {
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
+
+      {quitState !== 'idle' && (
+        <div className="quit-overlay">
+          <div className="quit-card">
+            {quitState === 'quitting' ? (
+              <>
+                <div className="quit-spinner" />
+                <div className="quit-text">正在退出 Trading MS…</div>
+                <div className="quit-sub">正在关闭本地服务</div>
+              </>
+            ) : (
+              <>
+                <div className="quit-text">程序已退出</div>
+                <div className="quit-sub">本地服务已停止，现在可以关闭此浏览器标签页了。</div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

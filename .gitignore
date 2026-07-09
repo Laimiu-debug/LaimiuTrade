@@ -10,6 +10,9 @@ frontend/dist/
 # 本地数据（复盘数据库、上传的截图）
 data/
 
+# 数据目录位置指针（含本机绝对路径）
+data_location.txt
+
 # 截图
 .shots/
 
@@ -20,3 +23,6 @@ dist/
 # 系统
 .DS_Store
 Thumbs.db
+
+# 编辑器/工具会话
+.zcode/

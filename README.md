@@ -1,4 +1,4 @@
-# LaimiuTrade · 波段复盘志
+# Trading MS · 波段复盘志
 
 个人 A 股波段交易复盘日志。胜利目标：完成 50 个 30% 波段的复利增长。
 
@@ -15,7 +15,7 @@
 
 ## 快速开始（exe 单文件）
 
-已打包用户直接双击 `LaimiuTrade.exe` 即可：自动启动本地服务并打开浏览器，
+已打包用户直接双击 `TradingMS.exe` 即可：自动启动本地服务并打开浏览器，
 数据保存在 exe 同目录的 `data/` 文件夹（迁移时连同 exe 一起拷走）。
 若浏览器没有自动打开，手动访问 http://127.0.0.1:8000 。
 
@@ -28,8 +28,8 @@
 ```bash
 cd frontend && npm run build && cd ..
 backend\.venv\Scripts\pip install pyinstaller
-backend\.venv\Scripts\pyinstaller --noconfirm --clean laimiutrade.spec
-# 产物: dist\LaimiuTrade.exe
+backend\.venv\Scripts\pyinstaller --noconfirm --clean trading-ms.spec
+# 产物: dist\TradingMS.exe
 ```
 
 ## 源码运行

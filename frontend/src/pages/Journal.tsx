@@ -84,7 +84,7 @@ export default function Journal() {
       </div>
 
       <div className="print-only" style={{ marginBottom: 16 }}>
-        <h3 style={{ margin: 0 }}>LaimiuTrade 每日复盘 · {day}</h3>
+        <h3 style={{ margin: 0 }}>Trading MS 每日复盘 · {day}</h3>
       </div>
 
       {data && (
@@ -188,7 +188,8 @@ export default function Journal() {
               <textarea value={data.next_risk_plan} onChange={e => patch({ next_risk_plan: e.target.value })} placeholder="跌破哪里止损？突发利空怎么办？" />
             </label>
 
-            <div className="card-title" style={{ marginTop: 8 }}>关注标的
+            <div className="card-title" style={{ marginTop: 8 }}>
+              <span>关注标的</span>
               <button className="ghost no-print" onClick={() => patch({ next_watchlist: [...watchlist, { code: '', name: '', condition: '', action: '' }] })}>+ 添加</button>
             </div>
             {watchlist.length === 0 ? <Empty text="明天重点盯谁？触发什么条件做什么？" /> : watchlist.map((w, i) => (

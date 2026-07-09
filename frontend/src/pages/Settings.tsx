@@ -2,17 +2,26 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useToast } from '../components';
 
-type SettingsMap = Record<string, string> & { ai_api_key_set?: boolean };
+type SettingsMap = Record<string, string> & { ai_score_api_key_set?: boolean; ai_ocr_api_key_set?: boolean };
 
 export default function Settings() {
   const toast = useToast();
   const [values, setValues] = useState<SettingsMap>({});
-  const [keySet, setKeySet] = useState(false);
+  const [scoreKeySet, setScoreKeySet] = useState(false);
+  const [ocrKeySet, setOcrKeySet] = useState(false);
+  const [dataDir, setDataDir] = useState('');
+  const [newDir, setNewDir] = useState('');
+  const [moving, setMoving] = useState(false);
 
   useEffect(() => {
     api.get<SettingsMap>('/api/settings').then(v => {
-      setKeySet(Boolean(v.ai_api_key_set));
+      setScoreKeySet(Boolean(v.ai_score_api_key_set));
+      setOcrKeySet(Boolean(v.ai_ocr_api_key_set));
+      setDataDir(v.data_dir ?? '');
+      delete v.ai_score_api_key_set;
+      delete v.ai_ocr_api_key_set;
       delete v.ai_api_key_set;
+      delete v.data_dir;
       setValues(v);
     }).catch(() => {});
   }, []);
@@ -23,9 +32,23 @@ export default function Settings() {
     try {
       await api.put('/api/settings', { values });
       toast('设置已保存');
-      if (values.ai_api_key) setKeySet(true);
-      set('ai_api_key', '');
+      if (values.ai_score_api_key) setScoreKeySet(true);
+      if (values.ai_ocr_api_key) setOcrKeySet(true);
+      set('ai_score_api_key', '');
+      set('ai_ocr_api_key', '');
     } catch (e) { toast(String(e)); }
+  };
+
+  const moveData = async () => {
+    const target = newDir.trim();
+    if (!target) { toast('请填写新的数据目录路径'); return; }
+    if (!window.confirm(`将把数据迁移到「${target}」并需要重启程序生效，确认继续？`)) return;
+    setMoving(true);
+    try {
+      await api.post('/api/system/move-data', { target_dir: target });
+      toast('迁移完成，程序即将退出，请重新启动');
+      setTimeout(() => window.location.reload(), 1800);
+    } catch (e) { toast(String(e)); } finally { setMoving(false); }
   };
 
   return (
@@ -83,23 +106,56 @@ export default function Settings() {
       </div>
 
       <div className="card" style={{ marginTop: 18 }}>
-        <h3 className="card-title">AI 配置（OpenAI 兼容接口）</h3>
-        <div className="grid grid-2">
-          <label className="field"><span>Base URL（如 https://dashscope.aliyuncs.com/compatible-mode/v1）</span>
-            <input value={values.ai_base_url ?? ''} onChange={e => set('ai_base_url', e.target.value)} />
+        <h3 className="card-title">AI 操作打分（文本模型）</h3>
+        <div className="grid grid-3">
+          <label className="field"><span>Base URL</span>
+            <input value={values.ai_score_base_url ?? ''} onChange={e => set('ai_score_base_url', e.target.value)}
+              placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
           </label>
-          <label className="field"><span>API Key {keySet && <span className="tag gold">已配置</span>}</span>
-            <input type="password" value={values.ai_api_key ?? ''} onChange={e => set('ai_api_key', e.target.value)}
-              placeholder={keySet ? '留空则保持不变' : 'sk-…'} />
+          <label className="field"><span>API Key {scoreKeySet && <span className="tag gold">已配置</span>}</span>
+            <input type="password" value={values.ai_score_api_key ?? ''} onChange={e => set('ai_score_api_key', e.target.value)}
+              placeholder={scoreKeySet ? '留空则保持不变' : 'sk-…'} />
           </label>
-          <label className="field"><span>文本模型（用于操作打分）</span>
-            <input value={values.ai_text_model ?? ''} onChange={e => set('ai_text_model', e.target.value)} placeholder="如 qwen-plus / glm-4-air" />
-          </label>
-          <label className="field"><span>视觉模型（用于截图识别）</span>
-            <input value={values.ai_vision_model ?? ''} onChange={e => set('ai_vision_model', e.target.value)} placeholder="如 qwen-vl-plus / glm-4v" />
+          <label className="field"><span>文本模型</span>
+            <input value={values.ai_score_text_model ?? ''} onChange={e => set('ai_score_text_model', e.target.value)} placeholder="如 qwen-plus / glm-4-air" />
           </label>
         </div>
-        <div className="muted">未配置时核心功能不受影响：打分可手动填，交易可手动录。</div>
+        <div className="muted">仅在「每日复盘」的「AI 打分」使用。未配置时打分可手动填写。</div>
+      </div>
+
+      <div className="card" style={{ marginTop: 18 }}>
+        <h3 className="card-title">AI 截图识别（视觉模型）</h3>
+        <div className="grid grid-3">
+          <label className="field"><span>Base URL</span>
+            <input value={values.ai_ocr_base_url ?? ''} onChange={e => set('ai_ocr_base_url', e.target.value)}
+              placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+          </label>
+          <label className="field"><span>API Key {ocrKeySet && <span className="tag gold">已配置</span>}</span>
+            <input type="password" value={values.ai_ocr_api_key ?? ''} onChange={e => set('ai_ocr_api_key', e.target.value)}
+              placeholder={ocrKeySet ? '留空则保持不变' : 'sk-…'} />
+          </label>
+          <label className="field"><span>视觉模型</span>
+            <input value={values.ai_ocr_vision_model ?? ''} onChange={e => set('ai_ocr_vision_model', e.target.value)} placeholder="如 qwen-vl-plus / glm-4v" />
+          </label>
+        </div>
+        <div className="muted">仅在「上传截图识别」交易时使用，与打分互不影响。未配置时交易可手动录入。</div>
+      </div>
+
+      <div className="card" style={{ marginTop: 18 }}>
+        <h3 className="card-title">数据存储位置</h3>
+        <div className="muted" style={{ marginBottom: 12 }}>
+          当前：<span className="mono">{dataDir || '—'}</span>
+        </div>
+        <div className="row">
+          <input placeholder="新的数据目录（绝对路径，如 D:\LaimiuData）" style={{ flex: 1, minWidth: 240 }}
+            value={newDir} onChange={e => setNewDir(e.target.value)} />
+          <button className="primary" onClick={moveData} disabled={moving}>
+            {moving ? '迁移中…' : '迁移并重启'}
+          </button>
+        </div>
+        <div className="muted" style={{ marginTop: 10 }}>
+          把数据库、上传截图、日志迁移到新目录（需空目录），迁移后需重新启动程序生效。换电脑时拷走该目录即可。
+        </div>
       </div>
     </div>
   );

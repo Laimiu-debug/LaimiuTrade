@@ -26,9 +26,10 @@ export default function Dashboard() {
 
   return (
     <div className="fade-in">
-      <div className="page-head">
-        <div>
-          <h2 className="page-title">总览</h2>
+      <div className="hero">
+        <img className="hero-logo" src="/logo.png" alt="Trading MS" />
+        <div className="hero-text">
+          <h2 className="hero-title">Trading MS</h2>
           <div className="page-sub">{state?.day ? `数据截至 ${state.day}` : '尚未录入数据'}</div>
         </div>
         <Link className="btn" to="/journal">写今日复盘 →</Link>

@@ -3,15 +3,17 @@
 import json
 import os
 import random
+import shutil
 import threading
 from datetime import date
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ..database import get_db
+from ..database import DATA_DIR, ROOT_DIR, engine, get_db
 from ..models import (
     CapitalFlow, DailyReview, FlashCard, MonthlyReview, Snapshot, Trade, WeeklyReview,
 )
@@ -30,6 +32,40 @@ def shutdown():
     """退出整个程序（响应发出后延迟终止进程）。"""
     threading.Timer(0.4, os._exit, args=(0,)).start()
     return {"ok": True}
+
+
+class MoveDataIn(BaseModel):
+    target_dir: str
+
+
+@router.post("/system/move-data")
+def move_data(body: MoveDataIn):
+    """把数据目录迁移到新位置，写入 data_location.txt，需重启生效。"""
+    target = Path(body.target_dir).expanduser().resolve()
+    if target == DATA_DIR.resolve():
+        raise HTTPException(400, "目标目录与当前数据目录相同")
+    if target == ROOT_DIR.resolve():
+        raise HTTPException(400, "不能使用程序根目录作为数据目录")
+
+    target.mkdir(parents=True, exist_ok=True)
+    if any(target.iterdir()):
+        # 避免迁移到一个已有同名数据库的目录造成覆盖
+        raise HTTPException(400, "目标目录非空，请选择一个空目录或先清空")
+
+    # 关闭数据库连接，确保 SQLite 文件落盘可移动
+    engine.dispose()
+
+    try:
+        # 移动 data 目录下的所有内容
+        for item in DATA_DIR.iterdir():
+            shutil.move(str(item), str(target / item.name))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"迁移失败：{e}") from e
+
+    # 写入新位置记录
+    (ROOT_DIR / "data_location.txt").write_text(str(target), encoding="utf-8")
+
+    return {"ok": True, "new_dir": str(target), "need_restart": True}
 
 
 # ---------- 闪记卡片 ----------
@@ -86,11 +122,15 @@ def random_card(db: Session = Depends(get_db)):
 @router.get("/settings")
 def get_settings(db: Session = Depends(get_db)):
     values = settings_svc.get_all(db)
-    if values.get("ai_api_key"):
-        values["ai_api_key_set"] = True
-        values["ai_api_key"] = ""
-    else:
-        values["ai_api_key_set"] = False
+    # 两套 AI Key 各自的「已配置」标记，密文不下发
+    values["ai_score_api_key_set"] = bool(values.get("ai_score_api_key") or values.get("ai_api_key"))
+    values["ai_ocr_api_key_set"] = bool(values.get("ai_ocr_api_key") or values.get("ai_api_key"))
+    values["ai_score_api_key"] = ""
+    values["ai_ocr_api_key"] = ""
+    # 旧 key（兼容）也不下发
+    values.pop("ai_api_key", None)
+    values["ai_api_key_set"] = values["ai_score_api_key_set"]
+    values["data_dir"] = str(DATA_DIR)
     return values
 
 
@@ -98,12 +138,17 @@ class SettingsIn(BaseModel):
     values: dict
 
 
+# 密钥类字段：留空表示「不修改已保存值」
+_SECRET_KEYS = {"ai_score_api_key", "ai_ocr_api_key", "ai_api_key"}
+
+
 @router.put("/settings")
 def put_settings(body: SettingsIn, db: Session = Depends(get_db)):
     values = {k: v for k, v in body.values.items() if k in settings_svc.DEFAULTS}
     # 空 key 表示不修改已保存的 key
-    if values.get("ai_api_key") == "":
-        values.pop("ai_api_key", None)
+    for k in list(values):
+        if k in _SECRET_KEYS and values[k] == "":
+            values.pop(k, None)
     settings_svc.set_many(db, values)
     return {"ok": True}
 
@@ -159,13 +204,13 @@ def export_json(db: Session = Depends(get_db)):
     }
     return JSONResponse(
         payload,
-        headers={"Content-Disposition": f"attachment; filename=laimiutrade-backup-{date.today().isoformat()}.json"},
+        headers={"Content-Disposition": f"attachment; filename=tradingms-backup-{date.today().isoformat()}.json"},
     )
 
 
 @router.get("/export/markdown")
 def export_markdown(db: Session = Depends(get_db)):
-    lines = [f"# LaimiuTrade 复盘导出（{date.today().isoformat()}）", ""]
+    lines = [f"# Trading MS 复盘导出（{date.today().isoformat()}）", ""]
     reviews = db.query(DailyReview).order_by(DailyReview.review_date).all()
     for r in reviews:
         lines += [f"## {r.review_date.isoformat()} 每日复盘", ""]
@@ -191,5 +236,5 @@ def export_markdown(db: Session = Depends(get_db)):
     return PlainTextResponse(
         "\n".join(lines),
         media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename=laimiutrade-reviews-{date.today().isoformat()}.md"},
+        headers={"Content-Disposition": f"attachment; filename=tradingms-reviews-{date.today().isoformat()}.md"},
     )

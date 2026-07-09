@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title LaimiuTrade
+title Trading MS
 cd /d "%~dp0"
 
 if not exist backend\.venv (
@@ -16,6 +16,6 @@ if not exist frontend\dist (
     exit /b 1
 )
 
-echo 启动 LaimiuTrade ...
+echo 启动 Trading MS ...
 start "" http://127.0.0.1:8000
 backend\.venv\Scripts\python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000

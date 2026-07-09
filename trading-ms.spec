@@ -4,8 +4,8 @@
 构建步骤（Windows）：
   1. cd frontend && npm run build
   2. backend\.venv\Scripts\pip install pyinstaller
-  3. backend\.venv\Scripts\pyinstaller --noconfirm --clean laimiutrade.spec
-产物：dist/LaimiuTrade.exe（数据保存在 exe 同目录 data/ 下）
+  3. backend\.venv\Scripts\pyinstaller --noconfirm --clean trading-ms.spec
+产物：dist/TradingMS.exe（数据保存在 exe 同目录 data/ 下）
 """
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -53,7 +53,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="LaimiuTrade",
+    name="TradingMS",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
