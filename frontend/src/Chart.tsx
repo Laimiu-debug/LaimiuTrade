@@ -27,9 +27,19 @@ const darkColors = {
 // 主题切换会触发页面 reload，因此模块加载时按当前主题取一次即可。
 export const CHART_COLORS = isLight() ? lightColors : darkColors;
 
-export function Chart({ option, height = 280 }: { option: EChartsCoreOption; height?: number }) {
+export function Chart({
+  option,
+  height = 280,
+  onPointClick,
+}: {
+  option: EChartsCoreOption;
+  height?: number;
+  onPointClick?: (index: number, date: string, value: number) => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
+  const onPointClickRef = useRef(onPointClick);
+  onPointClickRef.current = onPointClick;
 
   useEffect(() => {
     if (!ref.current) return;
@@ -40,9 +50,17 @@ export function Chart({ option, height = 280 }: { option: EChartsCoreOption; hei
       ? new ResizeObserver(() => onResize())
       : null;
     ro?.observe(ref.current);
+    const handler = (params: unknown) => {
+      const p = params as { componentType?: string; dataIndex?: number; name?: string; value?: number };
+      if (p.componentType === 'series' && p.dataIndex != null && onPointClickRef.current) {
+        onPointClickRef.current(p.dataIndex, String(p.name ?? ''), Number(p.value ?? 0));
+      }
+    };
+    chartRef.current.on('click', handler);
     return () => {
       window.removeEventListener('resize', onResize);
       ro?.disconnect();
+      chartRef.current?.off('click', handler);
       chartRef.current?.dispose();
       chartRef.current = null;
     };

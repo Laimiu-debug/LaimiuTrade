@@ -217,8 +217,9 @@ def score_trades(
 
 ## 输出要求
 严格输出 JSON：
-{{"trades": [{{"id": 交易ID, "summary": "此笔整体40字内", "scores": {{{", ".join(f'"{k}": {{"score": 0, "comment": ""}}' for k in SCORE_DIMENSIONS)}}}}}, ...], "daily_summary": "当日整体80字内（仅评价本次涉及的交易）"}}
+{{"trades": [{{"id": 交易ID, "summary": "此笔整体40字内", "scores": {{{", ".join(f'"{k}": {{"score": 0, "comment": ""}}' for k in SCORE_DIMENSIONS)}}}}}, ...], "daily_scores": {{{", ".join(f'"{k}": {{"score": 0, "comment": "整日该维度30-50字总评"}}' for k in SCORE_DIMENSIONS)}}}, "daily_summary": "当日整体80字内（仅评价本次涉及的交易）"}}
 
+daily_scores 是对当日操作在 6 维度上的**整体**评价（不是某一只股票的点评）；必须为 6 个维度都输出 score 与 comment。
 必须为「本次需评价的交易」中每笔都输出一项。"""
 
     content = _chat(db, [{"role": "user", "content": prompt}])

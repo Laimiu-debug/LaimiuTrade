@@ -63,6 +63,10 @@ def ensure_schema() -> None:
         if "position_value" not in snap_cols:
             conn.execute(text("ALTER TABLE snapshots ADD COLUMN position_value REAL"))
 
+        review_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(daily_reviews)"))}
+        if "next_position_rehearsal" not in review_cols:
+            conn.execute(text("ALTER TABLE daily_reviews ADD COLUMN next_position_rehearsal TEXT DEFAULT '[]'"))
+
 
 def get_db():
     db: Session = SessionLocal()

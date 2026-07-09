@@ -10,6 +10,7 @@ from ..database import UPLOAD_DIR, get_db
 from ..models import DailyReview, MonthlyReview, Snapshot, Trade, WeeklyReview
 from ..services import ai as ai_svc
 from ..services import market as market_svc
+from ..services import capital_estimate as capital_est_svc
 from ..services import netvalue, rounds as rounds_svc, stats
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
@@ -151,7 +152,7 @@ def _merge_trade_score_items(
 
 
 def _aggregate_daily_scores(trade_scores: dict) -> dict:
-    """从已打分交易汇总整日 6 维度概览（仅均分，维度点评留空由用户或整日总评补充）。"""
+    """从已打分交易汇总整日 6 维度均分（comment 由 AI daily_scores 补充）。"""
     daily: dict = {}
     for dim in ai_svc.SCORE_DIMENSIONS:
         collected: list[dict] = []
@@ -169,6 +170,38 @@ def _aggregate_daily_scores(trade_scores: dict) -> dict:
             "final": avg,
             "comment": "",
         }
+    return daily
+
+
+def _merge_daily_scores_from_ai(trade_scores: dict, result: dict) -> dict:
+    """合并逐笔均分与 AI 整日维度评语。"""
+    daily = _aggregate_daily_scores(trade_scores)
+    ai_daily_raw = result.get("daily_scores")
+    if isinstance(ai_daily_raw, dict):
+        ai_daily = _normalize_dim_scores(ai_daily_raw)
+        for dim, val in ai_daily.items():
+            if dim not in daily:
+                score_raw = val.get("score")
+                try:
+                    score_val = int(score_raw) if score_raw is not None else None
+                except (TypeError, ValueError):
+                    score_val = None
+                if score_val is None:
+                    continue
+                daily[dim] = {"ai": score_val, "final": score_val, "comment": val.get("comment", "")}
+            else:
+                comment = (val.get("comment") or "").strip()
+                if comment:
+                    daily[dim]["comment"] = comment
+                score_raw = val.get("score")
+                if score_raw is not None:
+                    try:
+                        holistic = int(score_raw)
+                        daily[dim]["ai"] = holistic
+                        if daily[dim].get("final") is None:
+                            daily[dim]["final"] = holistic
+                    except (TypeError, ValueError):
+                        pass
     return daily
 
 
@@ -271,7 +304,7 @@ def _run_ai_score(db: Session, row: DailyReview, day: date, trade_ids: list[int]
     merged = _merge_trade_score_items(trade_scores, items, trade_ids)
     if trade_ids and merged == 0:
         raise HTTPException(502, "AI 未返回有效的逐笔评分，请重试")
-    scores = _aggregate_daily_scores(trade_scores)
+    scores = _merge_daily_scores_from_ai(trade_scores, result)
 
     if trade_ids is None and result.get("daily_summary"):
         row.ai_summary = result.get("daily_summary", "")
@@ -312,7 +345,7 @@ def _run_ai_score_t_group(db: Session, row: DailyReview, day: date, code: str, t
     _merge_group_score(trade_scores, code, trade_ids, result)
     items = _normalize_ai_trade_items(result, trade_ids)
     merged = _merge_trade_score_items(trade_scores, items, trade_ids)
-    scores = _aggregate_daily_scores(trade_scores)
+    scores = _merge_daily_scores_from_ai(trade_scores, result)
     built = _build_trade_summaries_text(db, day, trade_scores)
     group_summary = result.get("group_summary") or result.get("daily_summary") or ""
     if isinstance(group_summary, str) and group_summary.strip():
@@ -332,6 +365,53 @@ def _run_ai_score_t_group(db: Session, row: DailyReview, day: date, code: str, t
     }
 
 
+def _positions_for_day(db: Session, day: date) -> list[dict]:
+    snap = db.query(Snapshot).filter(Snapshot.snap_date == day).first()
+    if snap:
+        positions = json.loads(snap.positions or "[]")
+        if isinstance(positions, list) and positions:
+            return positions
+    est = capital_est_svc.estimate_snapshot(db, day)
+    if est.get("ok") and est.get("positions"):
+        return est["positions"]
+    return []
+
+
+def _compare_rehearsal(planned: list, actual: list) -> list[dict]:
+    """对比昨日预演持仓与今日实际收盘持仓。"""
+    def key(p: dict) -> str:
+        return str(p.get("code") or "").strip()
+
+    planned_map = {key(p): p for p in planned if key(p)}
+    actual_map = {key(p): p for p in actual if key(p)}
+    codes = sorted(set(planned_map) | set(actual_map))
+    rows: list[dict] = []
+    for code in codes:
+        p = planned_map.get(code, {})
+        a = actual_map.get(code, {})
+        planned_qty = int(p.get("qty") or 0)
+        actual_qty = int(a.get("qty") or 0)
+        if planned_qty == actual_qty:
+            status = "match"
+        elif planned_qty > 0 and actual_qty == 0:
+            status = "planned_hold_gone"
+        elif planned_qty == 0 and actual_qty > 0:
+            status = "unplanned_new"
+        elif actual_qty > planned_qty:
+            status = "more_than_planned"
+        else:
+            status = "less_than_planned"
+        rows.append({
+            "code": code,
+            "name": a.get("name") or p.get("name") or code,
+            "planned_qty": planned_qty,
+            "actual_qty": actual_qty,
+            "delta": actual_qty - planned_qty,
+            "status": status,
+        })
+    return rows
+
+
 def _daily_dict(r: DailyReview) -> dict:
     return {
         "review_date": r.review_date.isoformat(),
@@ -346,6 +426,7 @@ def _daily_dict(r: DailyReview) -> dict:
         "next_watchlist": json.loads(r.next_watchlist or "[]"),
         "next_position_plan": r.next_position_plan,
         "next_risk_plan": r.next_risk_plan,
+        "next_position_rehearsal": json.loads(getattr(r, "next_position_rehearsal", None) or "[]"),
     }
 
 
@@ -385,6 +466,20 @@ def get_daily(day: date, db: Session = Depends(get_db)):
         }
     else:
         data["snapshot"] = None
+    data["today_positions"] = _positions_for_day(db, day)
+    prev_review = (
+        db.query(DailyReview)
+        .filter(DailyReview.review_date < day)
+        .order_by(DailyReview.review_date.desc())
+        .first()
+    )
+    prev_rehearsal = []
+    if prev_review:
+        prev_rehearsal = json.loads(getattr(prev_review, "next_position_rehearsal", None) or "[]")
+        if not isinstance(prev_rehearsal, list):
+            prev_rehearsal = []
+    data["prev_rehearsal"] = prev_rehearsal
+    data["rehearsal_compare"] = _compare_rehearsal(prev_rehearsal, data["today_positions"]) if prev_rehearsal else []
     return data
 
 
@@ -398,6 +493,7 @@ class DailyIn(BaseModel):
     next_watchlist: list = []
     next_position_plan: str = ""
     next_risk_plan: str = ""
+    next_position_rehearsal: list | None = None
 
 
 @router.put("/daily/{day}")
@@ -414,6 +510,8 @@ def save_daily(day: date, body: DailyIn, db: Session = Depends(get_db)):
     row.next_watchlist = json.dumps(body.next_watchlist, ensure_ascii=False)
     row.next_position_plan = body.next_position_plan
     row.next_risk_plan = body.next_risk_plan
+    if body.next_position_rehearsal is not None:
+        row.next_position_rehearsal = json.dumps(body.next_position_rehearsal, ensure_ascii=False)
     db.commit()
     return {"ok": True}
 

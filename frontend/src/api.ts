@@ -137,6 +137,34 @@ export interface SnapshotInfo {
   positions: SnapshotPosition[];
 }
 
+export interface PositionRehearsal {
+  code: string;
+  name: string;
+  qty: number;
+  note?: string;
+}
+
+export interface RehearsalCompareRow {
+  code: string;
+  name: string;
+  planned_qty: number;
+  actual_qty: number;
+  delta: number;
+  status: string;
+}
+
+export interface DayDetail {
+  date: string;
+  nav: number | null;
+  assets: number | null;
+  drawdown_pct: number | null;
+  trades: { id: number; code: string; name: string; side: string; price: number; qty: number; fees: number }[];
+  positions: SnapshotPosition[];
+  snapshot: { total_assets?: number; available_cash?: number | null; position_value?: number | null; estimated?: boolean } | null;
+  has_review: boolean;
+  ai_summary: string;
+}
+
 export interface DailyReview {
   review_date: string;
   market_observation: string;
@@ -150,6 +178,10 @@ export interface DailyReview {
   next_watchlist: WatchItem[];
   next_position_plan: string;
   next_risk_plan: string;
+  next_position_rehearsal: PositionRehearsal[];
+  today_positions: SnapshotPosition[];
+  prev_rehearsal: PositionRehearsal[];
+  rehearsal_compare: RehearsalCompareRow[];
   trades: { id: number; code: string; name: string; side: string; price: number; qty: number; fees: number }[];
   t_groups: TGroup[];
   snapshot: SnapshotInfo | null;

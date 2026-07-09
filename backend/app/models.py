@@ -83,6 +83,7 @@ class DailyReview(Base):
     next_watchlist: Mapped[str] = mapped_column(Text, default="[]")  # JSON: [{code,name,condition,action}]
     next_position_plan: Mapped[str] = mapped_column(Text, default="")
     next_risk_plan: Mapped[str] = mapped_column(Text, default="")
+    next_position_rehearsal: Mapped[str] = mapped_column(Text, default="[]")  # JSON: [{code,name,qty,note?}]
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, fmtMoney, fmtPct, type FlashCard, type NodeInfo, type Overview } from '../api';
+import { api, fmtMoney, fmtPct, type DayDetail, type FlashCard, type NodeInfo, type Overview } from '../api';
 import { Chart, CHART_COLORS, baseAxis, baseTooltip } from '../Chart';
-import { Empty, Stat } from '../components';
+import { Empty, SideTag, Stat } from '../components';
 
 interface NodesResp {
   state: Overview['state'];
@@ -14,12 +14,23 @@ export default function Dashboard() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [nodes, setNodes] = useState<NodesResp | null>(null);
   const [card, setCard] = useState<FlashCard | null>(null);
+  const [dayDetail, setDayDetail] = useState<DayDetail | null>(null);
+  const [dayLoading, setDayLoading] = useState(false);
 
   useEffect(() => {
     api.get<Overview>('/api/stats/overview').then(setOverview).catch(() => {});
     api.get<NodesResp>('/api/capital/nodes').then(setNodes).catch(() => {});
     api.get<FlashCard | null>('/api/cards/random').then(setCard).catch(() => {});
   }, []);
+
+  const openDayDetail = (date: string) => {
+    setDayLoading(true);
+    setDayDetail(null);
+    api.get<DayDetail>(`/api/stats/day/${date}`)
+      .then(setDayDetail)
+      .catch(() => setDayDetail(null))
+      .finally(() => setDayLoading(false));
+  };
 
   const state = overview?.state;
   const hasData = (overview?.curve.length ?? 0) > 0;
@@ -109,16 +120,20 @@ export default function Dashboard() {
 
       <div className="grid grid-2" style={{ marginTop: 18 }}>
         <div className="card">
-          <h3 className="card-title">净值曲线</h3>
+          <h3 className="card-title">
+            净值曲线
+            <span className="muted">点击数据点查看当日持仓与操作</span>
+          </h3>
           {hasData ? (
-            <Chart height={240} option={{
+            <Chart height={240} onPointClick={(_i, date) => openDayDetail(date)} option={{
               grid: { left: 48, right: 16, top: 20, bottom: 28 },
               tooltip: baseTooltip,
               xAxis: { type: 'category', data: overview!.curve.map(p => p.date), ...baseAxis },
               yAxis: { type: 'value', scale: true, ...baseAxis },
               series: [{
                 type: 'line', data: overview!.curve.map(p => p.nav),
-                showSymbol: false, lineStyle: { color: CHART_COLORS.gold, width: 2 },
+                showSymbol: true, symbolSize: 6,
+                lineStyle: { color: CHART_COLORS.gold, width: 2 },
                 areaStyle: { color: CHART_COLORS.goldSoft },
                 markLine: state?.next_threshold ? {
                   silent: true, symbol: 'none',
@@ -127,7 +142,7 @@ export default function Dashboard() {
                 } : undefined,
               }],
             }} />
-          ) : <Empty text="暂无净值数据 — 先到「资金账本」录入初始资金与每日快照" />}
+          ) : <Empty text="暂无净值数据 — 请先在「设置」录入初始资金，并在「资金账本」补录每日快照" />}
         </div>
 
         <div className="card">
@@ -156,6 +171,84 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {(dayDetail || dayLoading) && (
+        <div className="day-detail-overlay no-print" onClick={() => { setDayDetail(null); setDayLoading(false); }}>
+          <div className="day-detail-panel" onClick={e => e.stopPropagation()}>
+            <div className="page-head" style={{ marginBottom: 12 }}>
+              <h3 className="card-title" style={{ margin: 0 }}>
+                {dayLoading ? '加载中…' : `${dayDetail?.date} 详情`}
+              </h3>
+              <button className="ghost" onClick={() => { setDayDetail(null); setDayLoading(false); }}>关闭</button>
+            </div>
+            {dayDetail && (
+              <>
+                <div className="row" style={{ gap: 16, marginBottom: 14, flexWrap: 'wrap' }}>
+                  {dayDetail.nav != null && <span className="mono">净值 {dayDetail.nav.toFixed(4)}</span>}
+                  {dayDetail.assets != null && <span className="mono">资产 ¥{fmtMoney(dayDetail.assets)}</span>}
+                  {dayDetail.drawdown_pct != null && dayDetail.drawdown_pct < 0 && (
+                    <span className="neg mono">回撤 {fmtPct(dayDetail.drawdown_pct)}</span>
+                  )}
+                  {dayDetail.snapshot?.total_assets != null && (
+                    <span className="muted mono">
+                      快照 ¥{fmtMoney(dayDetail.snapshot.total_assets)}
+                      {dayDetail.snapshot.estimated ? '（推算）' : ''}
+                    </span>
+                  )}
+                </div>
+
+                <h4 className="card-title" style={{ fontSize: 13 }}>当日操作</h4>
+                {dayDetail.trades.length === 0 ? (
+                  <div className="muted" style={{ marginBottom: 14, fontSize: 12 }}>无交易记录</div>
+                ) : (
+                  <table style={{ marginBottom: 14 }}>
+                    <thead><tr><th>方向</th><th>标的</th><th style={{ textAlign: 'right' }}>价格×数量</th></tr></thead>
+                    <tbody>
+                      {dayDetail.trades.map(t => (
+                        <tr key={t.id}>
+                          <td><SideTag side={t.side} /></td>
+                          <td>{t.name || t.code} <span className="muted mono">{t.code}</span></td>
+                          <td style={{ textAlign: 'right' }} className="mono">{t.price} × {t.qty}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+
+                <h4 className="card-title" style={{ fontSize: 13 }}>收盘持仓</h4>
+                {dayDetail.positions.length === 0 ? (
+                  <Empty text="无持仓数据（可在资金账本补录快照）" />
+                ) : (
+                  <div className="snap-card-positions">
+                    {dayDetail.positions.map((p, i) => (
+                      <div className="snap-pos-row" key={`${p.code}-${i}`}>
+                        <span className="mono">{p.code}</span>
+                        <span>{p.name ?? '—'}</span>
+                        <span className="mono muted">{p.qty != null ? `${p.qty}股` : '—'}</span>
+                        <span className="mono muted">
+                          {p.market_value != null ? `¥${fmtMoney(p.market_value)}` : ''}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {dayDetail.ai_summary && (
+                  <div className="journal-day-summary" style={{ marginTop: 14 }}>
+                    <div className="journal-day-summary-label">复盘 AI 总评</div>
+                    {dayDetail.ai_summary}
+                  </div>
+                )}
+
+                <div className="row" style={{ marginTop: 16, gap: 8 }}>
+                  <Link className="btn" to={`/journal?day=${dayDetail.date}`} onClick={() => setDayDetail(null)}>查看复盘 →</Link>
+                  <Link className="ghost" to="/trades">交易记录</Link>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

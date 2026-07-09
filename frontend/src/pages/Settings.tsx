@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api } from '../api';
-import { NumberInput, useToast } from '../components';
+import { api, fmtMoney, today } from '../api';
+import { Empty, NumberInput, useToast, DateInput, Select } from '../components';
+
+const FLOW_KIND_OPTIONS = [
+  { value: 'initial', label: '初始资金' },
+  { value: 'deposit', label: '入金' },
+  { value: 'withdraw', label: '出金' },
+];
+const KIND_LABEL: Record<string, string> = { initial: '初始资金', deposit: '入金', withdraw: '出金' };
+interface FlowRow { id: number; flow_date: string; kind: string; amount: number; note: string }
 
 type SettingsMap = Record<string, string> & { ai_score_api_key_set?: boolean; ai_ocr_api_key_set?: boolean };
 
@@ -16,6 +24,14 @@ export default function Settings() {
   const [moving, setMoving] = useState(false);
   const [picking, setPicking] = useState(false);
   const [testing, setTesting] = useState<'' | 'score' | 'ocr'>('');
+  const [flows, setFlows] = useState<FlowRow[]>([]);
+  const [flowForm, setFlowForm] = useState({ flow_date: today(), kind: 'deposit', amount: '', note: '' });
+
+  const reloadFlows = useCallback(() => {
+    api.get<FlowRow[]>('/api/capital/flows').then(setFlows).catch(() => {});
+  }, []);
+
+  useEffect(reloadFlows, [reloadFlows]);
 
   const refreshTargetPreview = useCallback(async (dir: string) => {
     const trimmed = dir.trim();
@@ -102,14 +118,65 @@ export default function Settings() {
     } catch (e) { toast(String(e)); } finally { setTesting(''); }
   };
 
+  const addFlow = async () => {
+    const amount = parseFloat(flowForm.amount);
+    if (!amount || amount <= 0) { toast('请输入有效金额'); return; }
+    try {
+      await api.post('/api/capital/flows', { ...flowForm, amount });
+      setFlowForm({ ...flowForm, amount: '', note: '' });
+      toast('已记录');
+      reloadFlows();
+    } catch (e) { toast(String(e)); }
+  };
+
   return (
     <div className="fade-in">
       <div className="page-head">
         <div>
           <h2 className="page-title">设置</h2>
-          <div className="page-sub">费率、行情源与 AI 配置</div>
+          <div className="page-sub">费率、出入金、行情源与 AI 配置</div>
         </div>
         <button className="primary" onClick={save}>保存全部设置</button>
+      </div>
+
+      <div className="card" style={{ marginBottom: 18 }}>
+        <h3 className="card-title">出入金流水</h3>
+        <div className="muted" style={{ marginBottom: 12 }}>
+          初始资金、入金、出金按单位净值法折算份额，收益率不受出入金影响。
+        </div>
+        <div className="row" style={{ marginBottom: 16 }}>
+          <DateInput value={flowForm.flow_date} onChange={v => setFlowForm({ ...flowForm, flow_date: v })} style={{ width: 150 }} />
+          <Select
+            value={flowForm.kind}
+            onChange={v => setFlowForm({ ...flowForm, kind: v })}
+            options={FLOW_KIND_OPTIONS}
+            style={{ width: 118 }}
+          />
+          <NumberInput placeholder="金额" style={{ flex: 1, minWidth: 100 }}
+            value={flowForm.amount}
+            onChange={v => setFlowForm({ ...flowForm, amount: v })} />
+          <button className="primary" onClick={addFlow}>记录</button>
+        </div>
+        {flows.length === 0 ? <Empty text="暂无流水，请先添加初始资金" /> : (
+          <table>
+            <thead><tr><th>日期</th><th>类型</th><th style={{ textAlign: 'right' }}>金额</th><th>备注</th><th /></tr></thead>
+            <tbody>
+              {flows.map(f => (
+                <tr key={f.id}>
+                  <td>{f.flow_date}</td>
+                  <td><span className={`tag${f.kind === 'withdraw' ? ' sell' : ' gold'}`}>{KIND_LABEL[f.kind] ?? f.kind}</span></td>
+                  <td style={{ textAlign: 'right' }} className="mono">¥{fmtMoney(f.amount)}</td>
+                  <td className="muted">{f.note || '—'}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    <button className="danger-ghost" onClick={async () => {
+                      await api.del(`/api/capital/flows/${f.id}`); reloadFlows();
+                    }}>删除</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       <div className="card" style={{ marginBottom: 18 }}>

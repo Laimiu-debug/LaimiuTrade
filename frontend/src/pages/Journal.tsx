@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   api, fmtMoney, today, SCORE_DIMS,
-  type DailyReview, type ScoreEntry, type TGroup, type TradeScoreBundle, type WatchItem,
+  type DailyReview, type PositionRehearsal, type ScoreEntry, type TGroup, type TradeScoreBundle, type WatchItem,
 } from '../api';
-import { Empty, SideTag, useToast, DateInput, StockPicker } from '../components';
+import { Empty, NumberInput, SideTag, useToast, DateInput, StockPicker } from '../components';
 
 type DayTrade = DailyReview['trades'][number];
 
@@ -237,9 +238,137 @@ function AnalysisDetailPanel({
   return <Empty text="点击左侧交易卡片或做T组合，此处显示对应 AI 分析" />;
 }
 
+const REHEARSAL_STATUS: Record<string, string> = {
+  match: '一致',
+  planned_hold_gone: '预演持有但未持有',
+  unplanned_new: '未预演但新开',
+  more_than_planned: '多于预演',
+  less_than_planned: '少于预演',
+};
+
+function PrintTextBlock({ label, text }: { label: string; text: string }) {
+  if (!text.trim()) return null;
+  return (
+    <div className="print-text-block">
+      <div className="print-text-label">{label}</div>
+      <div className="print-text-body">{text}</div>
+    </div>
+  );
+}
+
+function JournalPrintReport({ data }: { data: DailyReview; day: string }) {
+  const tGroups = data.t_groups ?? [];
+  return (
+    <div className="journal-print-report">
+      <div className="print-section">
+        <h4>当日交易与 AI 分析</h4>
+        {data.trades.length === 0 ? (
+          <p className="muted">当日无交易</p>
+        ) : data.trades.map(t => {
+          const ts = data.trade_scores?.[String(t.id)] ?? {};
+          const summary = tradeSummary(ts);
+          const avg = tradeAvgScore(ts);
+          const tGroup = tGroups.find(g => g.trade_ids.includes(t.id));
+          return (
+            <div className="print-trade-block" key={t.id}>
+              <div className="print-trade-head">
+                <strong>{t.side === 'buy' ? '买入' : '卖出'} {t.name || t.code}</strong>
+                <span className="mono muted"> {t.code} · {t.price}×{t.qty}</span>
+                {tGroup && <span className="tag gold">做T</span>}
+                {avg != null && <span className="tag gold">均分 {avg}</span>}
+              </div>
+              {summary && <div className="trade-score-summary">{summary}</div>}
+              {tradeHasAnalysis(ts) ? (
+                <ScoreDimRows scores={ts as Record<string, ScoreEntry | undefined>} side={t.side} />
+              ) : (
+                <p className="muted">未分析</p>
+              )}
+            </div>
+          );
+        })}
+        {tGroups.map(g => {
+          const gs = data.trade_scores?.[groupScoreKey(g.code)] ?? {};
+          if (!tradeHasAnalysis(gs)) return null;
+          return (
+            <div className="print-trade-block" key={g.id}>
+              <div className="print-trade-head">
+                <strong>做T · {g.name}</strong>
+                <span className="mono muted"> {g.code}</span>
+              </div>
+              {tradeSummary(gs) && <div className="trade-score-summary">{tradeSummary(gs)}</div>}
+              <ScoreDimRows scores={gs as Record<string, ScoreEntry | undefined>} />
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="print-section">
+        <h4>整日操作概览</h4>
+        <ScoreDimRows scores={data.scores} />
+        {data.ai_summary && (
+          <div className="journal-day-summary">
+            <div className="journal-day-summary-label">整日 AI 总评</div>
+            {data.ai_summary}
+          </div>
+        )}
+      </div>
+
+      {data.snapshot && (
+        <div className="print-section">
+          <h4>收盘快照 · ¥{fmtMoney(data.snapshot.total_assets)}</h4>
+          {(data.snapshot.positions?.length ?? 0) > 0 && (
+            <table className="print-table">
+              <thead><tr><th>代码</th><th>名称</th><th>数量</th></tr></thead>
+              <tbody>
+                {data.snapshot.positions.map((p, i) => (
+                  <tr key={i}><td className="mono">{p.code}</td><td>{p.name}</td><td className="mono">{p.qty}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      <div className="print-section">
+        <h4>复盘正文</h4>
+        <PrintTextBlock label="盘面观察" text={data.market_observation} />
+        <PrintTextBlock label="决策复盘" text={data.decision_review} />
+        <PrintTextBlock label="错误与教训" text={data.mistakes} />
+      </div>
+
+      {(data.next_position_rehearsal?.length ?? 0) > 0 && (
+        <div className="print-section">
+          <h4>明日操作预演</h4>
+          <table className="print-table">
+            <thead><tr><th>代码</th><th>名称</th><th>预演持仓</th><th>备注</th></tr></thead>
+            <tbody>
+              {data.next_position_rehearsal.map((p, i) => (
+                <tr key={i}>
+                  <td className="mono">{p.code}</td>
+                  <td>{p.name}</td>
+                  <td className="mono">{p.qty}股{p.qty === 0 ? '（清仓）' : ''}</td>
+                  <td>{p.note ?? ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="print-section">
+        <h4>次日预研</h4>
+        <PrintTextBlock label="大盘预判" text={data.next_market_forecast} />
+        <PrintTextBlock label="仓位计划" text={data.next_position_plan} />
+        <PrintTextBlock label="风险预案" text={data.next_risk_plan} />
+      </div>
+    </div>
+  );
+}
+
 export default function Journal() {
   const toast = useToast();
-  const [day, setDay] = useState(today());
+  const [searchParams] = useSearchParams();
+  const [day, setDay] = useState(() => searchParams.get('day') || today());
   const [data, setData] = useState<DailyReview | null>(null);
   const [scoringId, setScoringId] = useState<number | 'all' | 'batch' | 't-group' | null>(null);
   const [focusedTradeId, setFocusedTradeId] = useState<number | null>(null);
@@ -258,7 +387,14 @@ export default function Journal() {
     return api.get<DailyReview>(`/api/reviews/daily/${d}`).then(res => {
       if (seq !== loadSeqRef.current) return;
       if (res.review_date !== d) return;
-      const normalized = { ...res, t_groups: res.t_groups ?? [] };
+      const normalized = {
+        ...res,
+        t_groups: res.t_groups ?? [],
+        next_position_rehearsal: res.next_position_rehearsal ?? [],
+        today_positions: res.today_positions ?? [],
+        prev_rehearsal: res.prev_rehearsal ?? [],
+        rehearsal_compare: res.rehearsal_compare ?? [],
+      };
       setData(normalized);
       const keep = focusAfterLoadRef.current;
       if (keep) {
@@ -276,6 +412,11 @@ export default function Journal() {
       throw e;
     });
   }, [toast]);
+
+  useEffect(() => {
+    const q = searchParams.get('day');
+    if (q && q !== day) setDay(q);
+  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setData(null);
@@ -352,6 +493,7 @@ export default function Journal() {
         next_watchlist: data.next_watchlist,
         next_position_plan: data.next_position_plan,
         next_risk_plan: data.next_risk_plan,
+        next_position_rehearsal: data.next_position_rehearsal ?? [],
       });
       if (!silent) toast('复盘已保存');
     } catch (e) { toast(String(e)); } finally { setSaving(false); }
@@ -523,6 +665,21 @@ export default function Journal() {
     patch({ next_watchlist: next });
   };
 
+  const rehearsal = data?.next_position_rehearsal ?? [];
+  const setRehearsal = (next: PositionRehearsal[]) => patch({ next_position_rehearsal: next });
+  const setRehearsalRow = (i: number, p: Partial<PositionRehearsal>) => {
+    setRehearsal(rehearsal.map((r, idx) => (idx === i ? { ...r, ...p } : r)));
+  };
+
+  const copyTodayToRehearsal = () => {
+    if (!data) return;
+    const base = (data.today_positions ?? [])
+      .filter(p => p.code && (p.qty ?? 0) > 0)
+      .map(p => ({ code: p.code!, name: p.name ?? '', qty: p.qty ?? 0, note: '' }));
+    setRehearsal(base);
+    toast('已从今日持仓复制，可调整数量（0=清仓）或添加新开仓');
+  };
+
   const renderTradeCard = (t: DayTrade, nested = false) => {
     if (!data) return null;
     const ts = data.trade_scores?.[String(t.id)] ?? {};
@@ -584,6 +741,7 @@ export default function Journal() {
 
       {data && data.review_date === day && (
         <>
+          <div className="screen-only">
           <div className="grid grid-2">
             <div className="card">
               <div className="page-head" style={{ marginBottom: 12 }}>
@@ -721,13 +879,16 @@ export default function Journal() {
           <div className="card" style={{ marginTop: 18 }} key={day}>
             <h3 className="card-title">复盘正文</h3>
             <label className="field"><span>盘面观察 · 大盘 / 板块 / 市场情绪</span>
-              <textarea key={`${day}-market`} value={data.market_observation} onChange={e => patch({ market_observation: e.target.value })} placeholder="今天市场发生了什么？" />
+              <div className="print-only print-text-body">{data.market_observation || '—'}</div>
+              <textarea className="no-print" key={`${day}-market`} value={data.market_observation} onChange={e => patch({ market_observation: e.target.value })} placeholder="今天市场发生了什么？" />
             </label>
             <label className="field"><span>决策复盘 · 每笔操作的理由与对错</span>
-              <textarea key={`${day}-decision`} value={data.decision_review} onChange={e => patch({ decision_review: e.target.value })} placeholder="为什么买？为什么卖？现在看对了还是错了？" />
+              <div className="print-only print-text-body">{data.decision_review || '—'}</div>
+              <textarea className="no-print" key={`${day}-decision`} value={data.decision_review} onChange={e => patch({ decision_review: e.target.value })} placeholder="为什么买？为什么卖？现在看对了还是错了？" />
             </label>
             <label className="field"><span>错误与教训</span>
-              <textarea key={`${day}-mistakes`} value={data.mistakes} onChange={e => patch({ mistakes: e.target.value })} placeholder="今天犯了什么错？下次如何避免？" />
+              <div className="print-only print-text-body">{data.mistakes || '—'}</div>
+              <textarea className="no-print" key={`${day}-mistakes`} value={data.mistakes} onChange={e => patch({ mistakes: e.target.value })} placeholder="今天犯了什么错？下次如何避免？" />
             </label>
 
             <div className="row no-print">
@@ -745,6 +906,80 @@ export default function Journal() {
                         await api.del(`/api/reviews/daily/${day}/images?url=${encodeURIComponent(url)}`);
                         load(day);
                       }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card no-print" style={{ marginTop: 18 }}>
+            <div className="page-head" style={{ marginBottom: 12 }}>
+              <h3 className="card-title" style={{ margin: 0 }}>明日操作预演</h3>
+              <div className="row" style={{ gap: 8 }}>
+                <button className="ghost" onClick={copyTodayToRehearsal}>从今日持仓复制</button>
+                <button className="ghost" onClick={() => setRehearsal([...rehearsal, { code: '', name: '', qty: 0, note: '新开仓' }])}>+ 预演新开仓</button>
+              </div>
+            </div>
+            <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
+              预演明日收盘持仓：数量改为 0 表示清仓；保存后次日可对比预演与实际。
+            </p>
+
+            {(data.rehearsal_compare?.length ?? 0) > 0 && (
+              <div className="rehearsal-compare-block" style={{ marginBottom: 16 }}>
+                <div className="card-title" style={{ fontSize: 13, marginBottom: 8 }}>昨日预演 vs 今日实际</div>
+                <table>
+                  <thead>
+                    <tr><th>标的</th><th>预演</th><th>实际</th><th>差异</th><th>状态</th></tr>
+                  </thead>
+                  <tbody>
+                    {data.rehearsal_compare.map(row => (
+                      <tr key={row.code}>
+                        <td>{row.name} <span className="mono muted">{row.code}</span></td>
+                        <td className="mono">{row.planned_qty}</td>
+                        <td className="mono">{row.actual_qty}</td>
+                        <td className={`mono${row.delta !== 0 ? ' neg' : ''}`}>{row.delta > 0 ? `+${row.delta}` : row.delta}</td>
+                        <td><span className="tag">{REHEARSAL_STATUS[row.status] ?? row.status}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {(data.today_positions?.length ?? 0) > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>今日收盘持仓（基准）</div>
+                <div className="snap-card-positions">
+                  {data.today_positions.map((p, i) => (
+                    <div className="snap-pos-row" key={`today-${p.code}-${i}`}>
+                      <span className="mono">{p.code}</span>
+                      <span>{p.name ?? '—'}</span>
+                      <span className="mono muted">{p.qty != null ? `${p.qty}股` : '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {rehearsal.length === 0 ? (
+              <Empty text="点击「从今日持仓复制」开始预演明日仓位变化" />
+            ) : (
+              <div className="rehearsal-edit-list">
+                {rehearsal.map((r, i) => (
+                  <div className="row rehearsal-edit-row" key={i} style={{ marginBottom: 8, alignItems: 'flex-end' }}>
+                    <StockPicker
+                      code={r.code}
+                      name={r.name}
+                      onSelect={(code, name) => setRehearsalRow(i, { code, name })}
+                      style={{ flex: 2, minWidth: 160 }}
+                    />
+                    <label className="field" style={{ flex: '0 0 100px', margin: 0 }}>
+                      <span>预演股数</span>
+                      <NumberInput value={String(r.qty)} onChange={v => setRehearsalRow(i, { qty: parseInt(v, 10) || 0 })} />
+                    </label>
+                    <input placeholder="备注（清仓/加仓等）" style={{ flex: 1, minWidth: 120 }}
+                      value={r.note ?? ''} onChange={e => setRehearsalRow(i, { note: e.target.value })} />
+                    <button className="danger-ghost" onClick={() => setRehearsal(rehearsal.filter((_, idx) => idx !== i))}>×</button>
                   </div>
                 ))}
               </div>
@@ -782,6 +1017,11 @@ export default function Journal() {
                 <button className="danger-ghost no-print" onClick={() => patch({ next_watchlist: watchlist.filter((_, idx) => idx !== i) })}>×</button>
               </div>
             ))}
+          </div>
+          </div>
+
+          <div className="print-only">
+            <JournalPrintReport data={data} day={day} />
           </div>
         </>
       )}

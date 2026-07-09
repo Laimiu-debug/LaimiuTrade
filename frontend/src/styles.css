@@ -971,6 +971,34 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
 .journal-snap-mini { margin-top: 0; background: var(--surface-1); }
 .journal-snap-mini .snap-card-total { font-size: 15px; }
 
+.day-detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.day-detail-panel {
+  width: min(560px, 100%);
+  max-height: min(80vh, 720px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-lg, 0 12px 40px rgba(0, 0, 0, 0.2));
+}
+.rehearsal-compare-block {
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.rehearsal-edit-row .field span { font-size: 11px; }
+
 .trade-analysis-list { display: flex; flex-direction: column; gap: 10px; }
 .trade-analysis-item {
   padding: 10px 12px;
@@ -1199,7 +1227,62 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
     resize: none;
   }
 
-  textarea { min-height: 0; white-space: pre-wrap; }
+  textarea { display: none !important; }
+
+  .print-text-body {
+    display: block !important;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.65;
+    padding: 8px 0 12px;
+    color: var(--text) !important;
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  .print-text-label {
+    font-weight: 600;
+    color: var(--gold-bright) !important;
+    font-size: 12px;
+    margin-top: 8px;
+  }
+
+  .screen-only { display: none !important; }
+
+  .journal-print-report { padding: 0; }
+  .journal-print-report .print-section {
+    margin-bottom: 18px;
+    break-inside: avoid;
+  }
+  .journal-print-report h4 {
+    margin: 0 0 10px;
+    color: var(--gold-bright) !important;
+    font-family: var(--font-display);
+    font-size: 14px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+  }
+  .print-trade-block {
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    background: var(--surface-2) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm);
+    break-inside: avoid;
+  }
+  .print-trade-head { margin-bottom: 8px; }
+  .print-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    margin-top: 6px;
+  }
+  .print-table th, .print-table td {
+    border: 1px solid var(--border) !important;
+    padding: 6px 8px;
+  }
+
+  .journal-page .grid-2 { grid-template-columns: 1fr !important; }
 
   table { border-color: var(--border) !important; }
 

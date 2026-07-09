@@ -19,11 +19,10 @@ from ..models import (
     CapitalFlow, DailyReview, FlashCard, MonthlyReview, Snapshot, Trade, WeeklyReview,
 )
 from ..services import ai as ai_svc
+from ..services import capital_estimate as capital_est_svc
 from ..services import folder_dialog
 from ..services import market as market_svc
-from ..services import netvalue, rounds as rounds_svc
-from ..services import settings as settings_svc
-from ..services import stats
+from ..services import netvalue, rounds as rounds_svc, settings as settings_svc, stats
 
 router = APIRouter(prefix="/api", tags=["misc"])
 
@@ -273,6 +272,62 @@ def overview(db: Session = Depends(get_db)):
         "round_stats": rounds_svc.round_stats(rounds),
         "node_timing": netvalue.node_timing(events, start_day),
         "missing_reviews": stats.missing_reviews(db),
+    }
+
+
+@router.get("/stats/day/{day}")
+def day_detail(day: date, db: Session = Depends(get_db)):
+    """某日净值、交易、持仓与复盘摘要（供首页曲线点击）。"""
+    points = netvalue.build_series(db)
+    nav_point = next((p for p in points if p.day == day), None)
+    curve = stats.nav_curve(points)
+    curve_point = next((p for p in curve if p["date"] == day.isoformat()), None)
+    trades = (
+        db.query(Trade)
+        .filter(Trade.trade_date == day)
+        .order_by(Trade.id)
+        .all()
+    )
+    snap = db.query(Snapshot).filter(Snapshot.snap_date == day).first()
+    positions: list[dict] = []
+    snapshot_info = None
+    if snap:
+        positions = json.loads(snap.positions or "[]")
+        if not isinstance(positions, list):
+            positions = []
+        snapshot_info = {
+            "total_assets": snap.total_assets,
+            "available_cash": snap.available_cash,
+            "position_value": snap.position_value,
+        }
+    elif not positions:
+        est = capital_est_svc.estimate_snapshot(db, day)
+        if est.get("ok"):
+            positions = est.get("positions") or []
+            snapshot_info = {
+                "total_assets": est.get("total_assets"),
+                "available_cash": est.get("cash"),
+                "position_value": est.get("position_value"),
+                "estimated": True,
+            }
+    review = db.query(DailyReview).filter(DailyReview.review_date == day).first()
+    return {
+        "date": day.isoformat(),
+        "nav": round(nav_point.nav, 4) if nav_point else None,
+        "assets": round(nav_point.assets, 2) if nav_point else None,
+        "drawdown_pct": curve_point["drawdown_pct"] if curve_point else None,
+        "trades": [
+            {
+                "id": t.id, "code": t.code, "name": t.name, "side": t.side,
+                "price": t.price, "qty": t.qty,
+                "fees": round(t.fee_commission + t.fee_stamp + t.fee_transfer, 2),
+            }
+            for t in trades
+        ],
+        "positions": positions,
+        "snapshot": snapshot_info,
+        "has_review": review is not None,
+        "ai_summary": review.ai_summary if review else "",
     }
 
 

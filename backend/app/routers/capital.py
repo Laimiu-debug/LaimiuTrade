@@ -102,6 +102,12 @@ def _snapshot_dict(row: Snapshot) -> dict:
     }
 
 
+@router.get("/status")
+def capital_status(db: Session = Depends(get_db)):
+    has_initial = db.query(CapitalFlow).filter(CapitalFlow.kind == "initial").first() is not None
+    return {"has_initial": has_initial}
+
+
 @router.get("/flows")
 def list_flows(db: Session = Depends(get_db)):
     rows = db.query(CapitalFlow).order_by(CapitalFlow.flow_date.desc(), CapitalFlow.id.desc()).all()
