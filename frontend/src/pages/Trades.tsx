@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtMoney, fmtPct, today, type RoundRow, type RoundStats, type TradeRow } from '../api';
-import { Empty, SideTag, Stat, useToast, DateInput, NumberInput, StockPicker } from '../components';
+import { Empty, SideTag, Stat, useToast, DateInput, NumberInput, StockPicker, Select } from '../components';
+
+const SIDE_OPTIONS = [
+  { value: 'buy', label: '买入' },
+  { value: 'sell', label: '卖出' },
+];
 
 interface PendingRow { id: number; trade_date: string; code: string; name: string; side: string; price: number; qty: number }
 
@@ -109,10 +114,12 @@ export default function Trades() {
             onSelect={(code, name) => setForm({ ...form, code, name })}
             style={{ width: 200 }}
           />
-          <select style={{ width: 80 }} value={form.side} onChange={e => setForm({ ...form, side: e.target.value })}>
-            <option value="buy">买入</option>
-            <option value="sell">卖出</option>
-          </select>
+          <Select
+            value={form.side}
+            onChange={v => setForm({ ...form, side: v })}
+            options={SIDE_OPTIONS}
+            style={{ width: 88 }}
+          />
           <NumberInput placeholder="价格" style={{ width: 90 }} value={form.price} onChange={v => setForm({ ...form, price: v })} />
           <NumberInput placeholder="数量(股)" style={{ width: 100 }} value={form.qty} onChange={v => setForm({ ...form, qty: v })} />
           <button className="primary" onClick={addTrade}>记录</button>

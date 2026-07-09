@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, fmtMoney, today } from '../api';
-import { Empty, useToast, DateInput, NumberInput } from '../components';
+import { Empty, useToast, DateInput, NumberInput, Select } from '../components';
+
+const FLOW_KIND_OPTIONS = [
+  { value: 'initial', label: '初始资金' },
+  { value: 'deposit', label: '入金' },
+  { value: 'withdraw', label: '出金' },
+];
 
 interface FlowRow { id: number; flow_date: string; kind: string; amount: number; note: string }
 interface SnapRow { id: number; snap_date: string; total_assets: number; note: string }
@@ -95,12 +101,12 @@ export default function Capital() {
           <h3 className="card-title">出入金流水</h3>
           <div className="row" style={{ marginBottom: 16 }}>
             <DateInput value={flowForm.flow_date} onChange={v => setFlowForm({ ...flowForm, flow_date: v })} style={{ width: 150 }} />
-            <select style={{ width: 110 }} value={flowForm.kind}
-              onChange={e => setFlowForm({ ...flowForm, kind: e.target.value })}>
-              <option value="initial">初始资金</option>
-              <option value="deposit">入金</option>
-              <option value="withdraw">出金</option>
-            </select>
+            <Select
+              value={flowForm.kind}
+              onChange={v => setFlowForm({ ...flowForm, kind: v })}
+              options={FLOW_KIND_OPTIONS}
+              style={{ width: 118 }}
+            />
             <NumberInput placeholder="金额" style={{ flex: 1, minWidth: 100 }}
               value={flowForm.amount}
               onChange={v => setFlowForm({ ...flowForm, amount: v })} />

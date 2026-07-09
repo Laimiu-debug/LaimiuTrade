@@ -4,6 +4,7 @@ import json
 import os
 import random
 import shutil
+import sys
 import threading
 from datetime import date
 from pathlib import Path
@@ -69,9 +70,16 @@ def _resolve_migration_target(raw: str) -> tuple[Path, str]:
 
 
 @router.get("/system/pick-folder")
-def pick_folder():
+def pick_folder_api():
     """弹出系统文件夹选择框（Windows）。"""
-    path = folder_dialog.pick_folder("选择数据存储位置")
+    if sys.platform != "win32":
+        raise HTTPException(501, "文件夹选择仅支持 Windows")
+    try:
+        path, err = folder_dialog.pick_folder("选择数据存储位置")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"无法打开文件夹选择框：{exc}") from exc
+    if err:
+        raise HTTPException(500, f"无法打开文件夹选择框：{err}")
     if not path:
         return {"path": None, "cancelled": True}
     return {"path": path, "cancelled": False}

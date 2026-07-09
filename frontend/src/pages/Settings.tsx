@@ -72,7 +72,7 @@ export default function Settings() {
       if (r.cancelled || !r.path) return;
       setPickDir(r.path);
     } catch (e) {
-      toast(String(e));
+      toast(String(e).replace(/^Error:\s*/, ''));
     } finally {
       setPicking(false);
     }

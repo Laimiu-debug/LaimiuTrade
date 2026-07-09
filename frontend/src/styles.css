@@ -318,14 +318,6 @@ input[type="number"] {
   -moz-appearance: textfield;
   appearance: textfield;
 }
-input[type="date"]::-webkit-calendar-picker-indicator {
-  opacity: 0;
-  position: absolute;
-  right: 0;
-  width: 100%;
-  height: 100%;
-  cursor: pointer;
-}
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--gold);
@@ -341,7 +333,219 @@ label.field > span {
   letter-spacing: 0.05em;
 }
 
-/* 日期选择器、数字输入 */
+/* 统一下拉 / 选择器 */
+.ui-picker { position: relative; min-width: 0; }
+.ui-picker-trigger,
+.ui-picker-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 34px 9px 12px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.4;
+  transition: border-color var(--dur) ease-out, box-shadow var(--dur) ease-out;
+}
+.ui-picker-trigger {
+  cursor: pointer;
+  text-align: left;
+}
+.ui-picker > button.ui-picker-trigger {
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 34px 9px 12px;
+  width: 100%;
+  font-weight: 400;
+  gap: 8px;
+}
+.ui-picker > button.ui-picker-trigger:hover {
+  background: var(--bg-deep);
+  border-color: var(--border-strong);
+}
+.ui-picker-field {
+  cursor: text;
+}
+.ui-picker-trigger:hover,
+.ui-picker-field:hover { border-color: var(--border-strong); }
+.ui-picker-trigger:focus-visible,
+.ui-picker-field:focus {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(212, 175, 106, 0.12);
+}
+.ui-picker-trigger.open,
+.ui-picker-field.open {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(212, 175, 106, 0.12);
+}
+.ui-picker-trigger .placeholder { color: var(--text-3); }
+.ui-picker-trigger > span,
+.ui-picker-field { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-picker .ui-chevron,
+.ui-picker .ui-picker-icon {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+.ui-picker .ui-chevron { width: 14px; height: 14px; }
+.ui-picker .ui-picker-icon { width: 16px; height: 16px; }
+.ui-picker-trigger.open .ui-chevron,
+.ui-picker-field.open + .ui-chevron { color: var(--gold); transform: translateY(-50%) rotate(180deg); }
+
+.ui-dropdown {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  min-width: 100%;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+.ui-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur) ease-out, color var(--dur) ease-out;
+}
+.ui-dropdown-item:hover { background: var(--surface-2); color: var(--gold-bright); }
+.ui-dropdown-item.selected {
+  background: var(--gold-dim);
+  color: var(--gold-bright);
+  font-weight: 500;
+}
+.ui-dropdown-item.muted {
+  cursor: default;
+  color: var(--text-3);
+  display: block;
+}
+.ui-dropdown-item.muted:hover { background: transparent; color: var(--text-3); }
+.ui-dropdown-item .mono { color: var(--gold-bright); flex-shrink: 0; }
+
+/* 日期选择器 */
+.date-picker { min-width: 150px; }
+.date-picker-panel {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 292px;
+  padding: 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+.date-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  gap: 4px;
+}
+.date-picker-head .ghost {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.date-picker-title {
+  flex: 1;
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: 14px;
+  color: var(--gold-bright);
+  letter-spacing: 0.04em;
+}
+.date-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-rows: 24px;
+  grid-auto-rows: 34px;
+  gap: 2px;
+}
+.date-picker-weekday {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.date-picker-cell {
+  height: 34px;
+  min-width: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+}
+.date-picker-cell.day {
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  transition: background var(--dur) ease-out, color var(--dur) ease-out, border-color var(--dur) ease-out;
+}
+.date-picker-cell.day:hover { background: var(--surface-2); color: var(--gold-bright); border-color: transparent; }
+.date-picker-cell.day.today { border-color: var(--border-strong); }
+.date-picker-cell.day.selected {
+  background: var(--gold-bright);
+  color: #fff;
+  font-weight: 600;
+  border-color: var(--gold-bright);
+}
+.date-picker-cell.day.selected:hover {
+  background: var(--gold-bright);
+  color: #fff;
+}
+.date-picker-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
 .input-wrap {
   position: relative;
   display: flex;
@@ -351,9 +555,6 @@ label.field > span {
   flex: 1;
   min-width: 0;
   padding-right: 38px;
-}
-.input-wrap.date-input > input {
-  color-scheme: light dark;
 }
 .input-addon {
   position: absolute;
@@ -376,39 +577,7 @@ label.field > span {
 .input-addon svg { width: 16px; height: 16px; }
 .input-number { font-variant-numeric: tabular-nums; }
 
-/* 股票搜索 */
-.stock-picker { position: relative; min-width: 160px; }
-.stock-picker > input { width: 100%; }
-.stock-picker-dropdown {
-  position: absolute;
-  z-index: 50;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  max-height: 240px;
-  overflow-y: auto;
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-}
-.stock-picker-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 9px 12px;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-.stock-picker-item:hover { background: var(--surface-2); }
-.stock-picker-item.muted { cursor: default; }
-.stock-picker-item.muted:hover { background: transparent; }
-.stock-picker-item .mono { color: var(--gold-bright); flex-shrink: 0; }
+.stock-picker { min-width: 160px; }
 
 /* 数据目录 */
 .data-dir-panel { display: flex; flex-direction: column; gap: 16px; }

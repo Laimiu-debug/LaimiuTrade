@@ -4,9 +4,17 @@
 - 无控制台窗口模式下 stdout/stderr 为 None，重定向到 data/app.log
 """
 
+import sys
+
+# 文件夹选择子进程：必须在重型依赖加载前退出
+if __name__ == "__main__" and len(sys.argv) >= 4 and sys.argv[1] == "--pick-folder":
+    from app.services.folder_dialog import run_pick_folder_cli
+
+    run_pick_folder_cli()
+    sys.exit(0)
+
 import os
 import socket
-import sys
 import threading
 import webbrowser
 from pathlib import Path
