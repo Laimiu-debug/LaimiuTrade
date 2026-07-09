@@ -121,7 +121,7 @@ html, body {
   border-bottom: 1px solid var(--border);
   margin-bottom: 18px;
 }
-.brand-row { display: flex; align-items: center; gap: 10px; }
+.brand-row { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
 .brand-logo {
   width: 34px; height: 34px;
   border-radius: 9px;
@@ -131,10 +131,11 @@ html, body {
 }
 .brand-title {
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: 19px;
   letter-spacing: 0.04em;
   color: var(--gold-bright);
   margin: 0;
+  white-space: nowrap;
 }
 .brand-sub { font-size: 11px; color: var(--text-3); letter-spacing: 0.2em; margin-top: 4px; }
 
@@ -230,8 +231,6 @@ html, body {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 22px 24px;
-  display: flex;
-  flex-direction: column;
 }
 .card > * { min-width: 0; }
 .card + .card { margin-top: 18px; }
@@ -245,9 +244,7 @@ html, body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  flex-shrink: 0;
 }
-.card > .card-title + * { flex: 1 1 auto; }
 
 .grid { display: grid; gap: 18px; align-items: stretch; }
 .grid-2 { grid-template-columns: 1fr 1fr; }

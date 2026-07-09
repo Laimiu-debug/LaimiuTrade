@@ -47,6 +47,39 @@ def is_configured(db: Session, vision: bool = False) -> bool:
     return bool(base and key and model)
 
 
+def test_connection(base_url: str, api_key: str, model: str) -> dict:
+    """用给定配置发一条最小测试请求，返回 {ok, message}。不依赖已保存设置。
+
+    兼容两种用途：score（文本）/ ocr（视觉）。视觉模型若不支持纯文本输入，
+    仍能通过本测试（多数视觉模型兼容文本输入）。
+    """
+    missing = [name for name, val in [("Base URL", base_url), ("API Key", api_key), ("模型名", model)] if not val]
+    if missing:
+        return {"ok": False, "message": "未填写：" + "、".join(missing)}
+    try:
+        resp = httpx.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 5},
+            timeout=30,
+        )
+    except httpx.HTTPError as e:
+        return {"ok": False, "message": f"网络错误：{e}"}
+    if resp.status_code == 200:
+        try:
+            content = resp.json()["choices"][0]["message"]["content"]
+            return {"ok": True, "message": f"连接成功，模型回复「{content[:20]}」"}
+        except (KeyError, IndexError):
+            return {"ok": True, "message": "连接成功"}
+    # 非 200：尽量提取错误信息
+    try:
+        detail = resp.json()
+        msg = detail.get("error", {}).get("message") or detail.get("message") or str(detail)[:120]
+    except Exception:  # noqa: BLE001
+        msg = resp.text[:120] if resp.text else resp.reason_phrase
+    return {"ok": False, "message": f"HTTP {resp.status_code}：{msg}"}
+
+
 def _chat(db: Session, messages: list[dict], vision: bool = False) -> str:
     base, key, model = _ai_config(db, vision=vision)
     if not (base and key and model):

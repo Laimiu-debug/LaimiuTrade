@@ -17,6 +17,7 @@ from ..database import DATA_DIR, ROOT_DIR, engine, get_db
 from ..models import (
     CapitalFlow, DailyReview, FlashCard, MonthlyReview, Snapshot, Trade, WeeklyReview,
 )
+from ..services import ai as ai_svc
 from ..services import market as market_svc
 from ..services import netvalue, rounds as rounds_svc
 from ..services import settings as settings_svc
@@ -151,6 +152,28 @@ def put_settings(body: SettingsIn, db: Session = Depends(get_db)):
             values.pop(k, None)
     settings_svc.set_many(db, values)
     return {"ok": True}
+
+
+class TestAIIn(BaseModel):
+    kind: str  # "score" | "ocr"
+    # 可选：传入表单当前值（未保存也能测试）。为空则回退已保存配置。
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+
+
+@router.post("/settings/test-ai")
+def test_ai(body: TestAIIn, db: Session = Depends(get_db)):
+    """测试 AI 配置连通性。优先用传入值，为空则回退已保存值（含旧 key 兼容）。"""
+    if body.kind == "ocr":
+        base = body.base_url or settings_svc.get(db, "ai_ocr_base_url") or settings_svc.get(db, "ai_base_url")
+        key = body.api_key or settings_svc.get(db, "ai_ocr_api_key") or settings_svc.get(db, "ai_api_key")
+        model = body.model or settings_svc.get(db, "ai_ocr_vision_model") or settings_svc.get(db, "ai_vision_model")
+    else:
+        base = body.base_url or settings_svc.get(db, "ai_score_base_url") or settings_svc.get(db, "ai_base_url")
+        key = body.api_key or settings_svc.get(db, "ai_score_api_key") or settings_svc.get(db, "ai_api_key")
+        model = body.model or settings_svc.get(db, "ai_score_text_model") or settings_svc.get(db, "ai_text_model")
+    return ai_svc.test_connection(base, key, model)
 
 
 # ---------- 行情 ----------

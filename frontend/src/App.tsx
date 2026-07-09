@@ -104,7 +104,6 @@ export default function App() {
           <button type="button" className="nav-theme no-print" onClick={toggleTheme} title="切换深色/浅色主题">
             {theme === 'dark' ? '☀ 浅色' : '🌙 深色'}
           </button>
-          <div>数据存于本地 · v0.1</div>
           <button type="button" className="nav-quit no-print" onClick={quitApp}>退出程序</button>
         </div>
       </aside>

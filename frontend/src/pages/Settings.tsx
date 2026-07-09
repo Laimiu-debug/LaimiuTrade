@@ -12,6 +12,7 @@ export default function Settings() {
   const [dataDir, setDataDir] = useState('');
   const [newDir, setNewDir] = useState('');
   const [moving, setMoving] = useState(false);
+  const [testing, setTesting] = useState<'' | 'score' | 'ocr'>('');
 
   useEffect(() => {
     api.get<SettingsMap>('/api/settings').then(v => {
@@ -49,6 +50,17 @@ export default function Settings() {
       toast('迁移完成，程序即将退出，请重新启动');
       setTimeout(() => window.location.reload(), 1800);
     } catch (e) { toast(String(e)); } finally { setMoving(false); }
+  };
+
+  const testAI = async (kind: 'score' | 'ocr') => {
+    setTesting(kind);
+    try {
+      const payload = kind === 'ocr'
+        ? { kind, base_url: values.ai_ocr_base_url ?? '', api_key: values.ai_ocr_api_key ?? '', model: values.ai_ocr_vision_model ?? '' }
+        : { kind, base_url: values.ai_score_base_url ?? '', api_key: values.ai_score_api_key ?? '', model: values.ai_score_text_model ?? '' };
+      const r = await api.post<{ ok: boolean; message: string }>('/api/settings/test-ai', payload);
+      toast(r.message);
+    } catch (e) { toast(String(e)); } finally { setTesting(''); }
   };
 
   return (
@@ -106,7 +118,12 @@ export default function Settings() {
       </div>
 
       <div className="card" style={{ marginTop: 18 }}>
-        <h3 className="card-title">AI 操作打分（文本模型）</h3>
+        <h3 className="card-title">
+          <span>AI 操作打分（文本模型）</span>
+          <button className="ghost no-print" onClick={() => testAI('score')} disabled={testing !== ''}>
+            {testing === 'score' ? '测试中…' : '测试连接'}
+          </button>
+        </h3>
         <div className="grid grid-3">
           <label className="field"><span>Base URL</span>
             <input value={values.ai_score_base_url ?? ''} onChange={e => set('ai_score_base_url', e.target.value)}
@@ -124,7 +141,12 @@ export default function Settings() {
       </div>
 
       <div className="card" style={{ marginTop: 18 }}>
-        <h3 className="card-title">AI 截图识别（视觉模型）</h3>
+        <h3 className="card-title">
+          <span>AI 截图识别（视觉模型）</span>
+          <button className="ghost no-print" onClick={() => testAI('ocr')} disabled={testing !== ''}>
+            {testing === 'ocr' ? '测试中…' : '测试连接'}
+          </button>
+        </h3>
         <div className="grid grid-3">
           <label className="field"><span>Base URL</span>
             <input value={values.ai_ocr_base_url ?? ''} onChange={e => set('ai_ocr_base_url', e.target.value)}
