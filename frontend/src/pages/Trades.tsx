@@ -21,6 +21,7 @@ interface SnapshotSuggestion {
   total_assets: number;
   cash: number;
   position_value: number;
+  positions?: { code?: string; name?: string; qty?: number; price?: number; market_value?: number }[];
   message?: string;
 }
 
@@ -200,6 +201,9 @@ export default function Trades() {
       await api.post('/api/capital/snapshots', {
         snap_date: snapshotPrompt.snap_date,
         total_assets: snapshotPrompt.total_assets,
+        available_cash: snapshotPrompt.cash,
+        position_value: snapshotPrompt.position_value,
+        positions: snapshotPrompt.positions ?? [],
         note: '交易确认后自动推算',
       });
       toast('今日快照已保存到资金账本');

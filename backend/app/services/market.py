@@ -128,9 +128,10 @@ def get_daily(db: Session, code: str, limit: int = 120) -> dict:
     return {"source": None, "code": code, "klines": [], "errors": errors}
 
 
-# ---------- 股票搜索 ----------
+# ---------- 股票 / ETF 搜索 ----------
 
 _stock_cache: list[dict[str, str]] | None = None
+_etf_cache: list[dict[str, str]] | None = None
 
 
 def _load_stock_list() -> list[dict[str, str]]:
@@ -150,13 +151,39 @@ def _load_stock_list() -> list[dict[str, str]]:
     return _stock_cache
 
 
+def _load_etf_list() -> list[dict[str, str]]:
+    global _etf_cache
+    if _etf_cache is not None:
+        return _etf_cache
+    try:
+        import akshare as ak  # noqa: PLC0415
+
+        df = ak.fund_etf_spot_em()
+        code_col = "代码" if "代码" in df.columns else "fund_code"
+        name_col = "名称" if "名称" in df.columns else "name"
+        _etf_cache = [
+            {"code": str(row[code_col]).zfill(6), "name": str(row[name_col])}
+            for _, row in df.iterrows()
+        ]
+    except Exception:  # noqa: BLE001
+        _etf_cache = []
+    return _etf_cache
+
+
+def _all_securities() -> list[dict[str, str]]:
+    merged: dict[str, dict[str, str]] = {}
+    for item in _load_stock_list() + _load_etf_list():
+        merged[item["code"]] = item
+    return list(merged.values())
+
+
 def lookup_by_code(code: str) -> dict[str, str] | None:
-    """按 6 位 A 股代码精确查找。"""
+    """按 6 位 A 股 / ETF 代码精确查找。"""
     digits = "".join(ch for ch in code if ch.isdigit())
     if len(digits) != 6:
         return None
     target = digits.zfill(6)
-    for item in _load_stock_list():
+    for item in _all_securities():
         if item["code"] == target:
             return item
     return None
@@ -171,7 +198,7 @@ def resolve_stock(code: str, name: str) -> tuple[str, str]:
     if len(digits) == 6:
         hit = lookup_by_code(digits)
         if hit:
-            return hit["code"], name or hit["name"]
+            return hit["code"], hit["name"]
 
     if name:
         hits = search_stocks(name, limit=8)
@@ -187,7 +214,7 @@ def resolve_stock(code: str, name: str) -> tuple[str, str]:
     if digits:
         hits = search_stocks(digits, limit=3)
         if hits and hits[0]["code"] == digits.zfill(6):
-            return hits[0]["code"], name or hits[0]["name"]
+            return hits[0]["code"], hits[0]["name"]
 
     if len(digits) == 6:
         return digits.zfill(6), name
@@ -195,11 +222,11 @@ def resolve_stock(code: str, name: str) -> tuple[str, str]:
 
 
 def search_stocks(query: str, limit: int = 12) -> list[dict[str, str]]:
-    """按代码或名称模糊匹配 A 股列表。"""
+    """按代码或名称模糊匹配 A 股 / ETF 列表。"""
     q = query.strip()
     if not q:
         return []
-    stocks = _load_stock_list()
+    stocks = _all_securities()
     q_lower = q.lower()
     q_digits = "".join(ch for ch in q if ch.isdigit())
 

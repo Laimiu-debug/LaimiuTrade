@@ -19,13 +19,16 @@ class CapitalFlow(Base):
 
 
 class Snapshot(Base):
-    """每日收盘账户总资产快照。"""
+    """每日收盘账户快照（总资产 + 持仓明细）。"""
 
     __tablename__ = "snapshots"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     snap_date: Mapped[date] = mapped_column(Date, unique=True, index=True)
     total_assets: Mapped[float] = mapped_column(Float)
+    available_cash: Mapped[float | None] = mapped_column(Float, nullable=True)
+    position_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    positions: Mapped[str] = mapped_column(Text, default="[]")
     note: Mapped[str] = mapped_column(Text, default="")
 
 

@@ -342,10 +342,23 @@ export function StockPicker({ code, name, onSelect, style }: {
     const digits = query.replace(/\D/g, '');
     if (digits.length !== 6) return;
     const exact = hits.find(h => h.code === digits.padStart(6, '0'));
-    if (exact && exact.code !== code) {
+    if (exact && (!name || exact.name !== name)) {
       pick(exact);
     }
-  }, [hits, loading, open, query, code, pick]);
+  }, [hits, loading, open, query, code, name, pick]);
+
+  useEffect(() => {
+    const digits = (code || '').replace(/\D/g, '');
+    if (digits.length !== 6 || name) return;
+    api.get<StockHit>(`/api/market/lookup/stock?q=${encodeURIComponent(digits)}`)
+      .then(hit => {
+        if (hit.name) {
+          onSelect(hit.code, hit.name);
+          if (!editingRef.current) setQuery(`${hit.code} ${hit.name}`);
+        }
+      })
+      .catch(() => {});
+  }, [code, name, onSelect]);
 
   const resolveQuery = useCallback(async () => {
     const q = query.trim();

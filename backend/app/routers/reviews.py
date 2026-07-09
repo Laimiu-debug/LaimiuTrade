@@ -14,10 +14,114 @@ from ..services import netvalue, rounds as rounds_svc, stats
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
 
+_DIM_ALIASES = {
+    "仓位控制": "position",
+    "回撤控制": "drawdown",
+    "计划执行力": "discipline",
+    "买点质量": "entry",
+    "卖点质量": "exit",
+    "情绪管理": "emotion",
+}
 
-def _merge_trade_score_items(trade_scores: dict, items: list) -> dict:
+
+def _coerce_trade_id(raw, fallback: int | None = None) -> int | None:
+    if raw is None:
+        return fallback
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw)
+    s = str(raw).strip().lstrip("#")
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if digits:
+        return int(digits)
+    return fallback
+
+
+def _normalize_dim_scores(scores: dict | None) -> dict:
+    if not isinstance(scores, dict):
+        return {}
+    out: dict = {}
+    for key, val in scores.items():
+        dim = key if key in ai_svc.SCORE_DIMENSIONS else _DIM_ALIASES.get(str(key))
+        if not dim:
+            continue
+        if isinstance(val, (int, float)):
+            out[dim] = {"score": int(val), "comment": ""}
+        elif isinstance(val, dict):
+            score_raw = val.get("score", val.get("分数", val.get("value")))
+            try:
+                score_val = int(score_raw) if score_raw is not None else None
+            except (TypeError, ValueError):
+                score_val = None
+            comment = val.get("comment") or val.get("点评") or val.get("commentary") or ""
+            out[dim] = {"score": score_val, "comment": str(comment) if comment else ""}
+    return out
+
+
+def _normalize_ai_trade_items(result: dict, expected_ids: list[int] | None) -> list[dict]:
+    """兼容 LLM 多种 JSON 结构，并修正 id / scores 字段。"""
+    items = result.get("trades")
+    if items is None and isinstance(result.get("data"), dict):
+        items = result["data"].get("trades")
+    if isinstance(items, dict):
+        items = [
+            {"id": key, **val} if isinstance(val, dict) else {"id": key, "summary": val}
+            for key, val in items.items()
+        ]
+    if not isinstance(items, list):
+        items = []
+
+    expected = list(expected_ids or [])
+    normalized: list[dict] = []
+    for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        fallback = expected[i] if i < len(expected) else (expected[0] if len(expected) == 1 else None)
+        trade_id = _coerce_trade_id(item.get("id"), fallback)
+        if trade_id is None:
+            continue
+        summary = item.get("summary") or item.get("总评") or item.get("comment") or ""
+        normalized.append({
+            "id": trade_id,
+            "summary": summary,
+            "scores": _normalize_dim_scores(item.get("scores")),
+        })
+
+    # 单笔分析时 LLM 常漏 id：若仅一条结果且仅一笔待评，强制对齐
+    if not normalized and len(expected) == 1 and len(items) == 1 and isinstance(items[0], dict):
+        item = items[0]
+        normalized.append({
+            "id": expected[0],
+            "summary": item.get("summary") or item.get("总评") or "",
+            "scores": _normalize_dim_scores(item.get("scores")),
+        })
+    # LLM 有时直接返回扁平结构，无 trades 数组
+    if not normalized and len(expected) == 1:
+        flat_scores = _normalize_dim_scores({
+            k: v for k, v in result.items()
+            if k in ai_svc.SCORE_DIMENSIONS or k in _DIM_ALIASES
+        })
+        summary = result.get("summary") or result.get("daily_summary") or result.get("总评") or ""
+        if flat_scores or (isinstance(summary, str) and summary.strip()):
+            normalized.append({
+                "id": expected[0],
+                "summary": summary,
+                "scores": flat_scores,
+            })
+    return normalized
+
+
+def _merge_trade_score_items(
+    trade_scores: dict,
+    items: list,
+    expected_ids: list[int] | None = None,
+) -> int:
+    merged = 0
+    if expected_ids and not items:
+        items = []
     for item in items:
-        trade_id = item.get("id")
+        trade_id = _coerce_trade_id(item.get("id"))
         if trade_id is None:
             continue
         key = str(trade_id)
@@ -25,23 +129,29 @@ def _merge_trade_score_items(trade_scores: dict, items: list) -> dict:
         summary = item.get("summary")
         if isinstance(summary, str) and summary.strip():
             entry["_summary"] = {"comment": summary.strip()}
-        for dim, val in (item.get("scores") or {}).items():
-            if dim not in ai_svc.SCORE_DIMENSIONS:
-                continue
-            if not isinstance(val, dict):
-                continue
+        for dim, val in _normalize_dim_scores(item.get("scores")).items():
             dim_entry = entry.get(dim) or {}
-            dim_entry["ai"] = val.get("score")
+            score_raw = val.get("score")
+            if score_raw is not None:
+                try:
+                    dim_entry["ai"] = int(score_raw)
+                except (TypeError, ValueError):
+                    pass
             dim_entry["comment"] = val.get("comment", "")
-            if dim_entry.get("final") is None:
-                dim_entry["final"] = val.get("score")
+            if dim_entry.get("final") is None and dim_entry.get("ai") is not None:
+                dim_entry["final"] = dim_entry["ai"]
             entry[dim] = dim_entry
         trade_scores[key] = entry
-    return trade_scores
+        if (isinstance(summary, str) and summary.strip()) or any(
+            isinstance(entry.get(dim), dict) and entry[dim].get("ai") is not None
+            for dim in ai_svc.SCORE_DIMENSIONS
+        ):
+            merged += 1
+    return merged
 
 
 def _aggregate_daily_scores(trade_scores: dict) -> dict:
-    """从已打分交易汇总整日 6 维度概览。"""
+    """从已打分交易汇总整日 6 维度概览（仅均分，维度点评留空由用户或整日总评补充）。"""
     daily: dict = {}
     for dim in ai_svc.SCORE_DIMENSIONS:
         collected: list[dict] = []
@@ -54,11 +164,10 @@ def _aggregate_daily_scores(trade_scores: dict) -> dict:
         if not collected:
             continue
         avg = round(sum(d["ai"] for d in collected if d.get("ai") is not None) / len(collected))
-        comments = [d.get("comment", "").strip() for d in collected if d.get("comment")]
         daily[dim] = {
             "ai": avg,
             "final": avg,
-            "comment": " ".join(comments[:2]),
+            "comment": "",
         }
     return daily
 
@@ -92,14 +201,17 @@ def _merge_group_score(trade_scores: dict, code: str, trade_ids: list[int], resu
     if isinstance(summary, str) and summary.strip():
         entry["_summary"] = {"comment": summary.strip()}
     entry["_meta"] = {"kind": "t", "code": code, "trade_ids": trade_ids}
-    for dim, val in (result.get("group_scores") or {}).items():
-        if dim not in ai_svc.SCORE_DIMENSIONS or not isinstance(val, dict):
-            continue
+    for dim, val in _normalize_dim_scores(result.get("group_scores")).items():
         dim_entry = entry.get(dim) or {}
-        dim_entry["ai"] = val.get("score")
+        score_raw = val.get("score")
+        if score_raw is not None:
+            try:
+                dim_entry["ai"] = int(score_raw)
+            except (TypeError, ValueError):
+                pass
         dim_entry["comment"] = val.get("comment", "")
-        if dim_entry.get("final") is None:
-            dim_entry["final"] = val.get("score")
+        if dim_entry.get("final") is None and dim_entry.get("ai") is not None:
+            dim_entry["final"] = dim_entry["ai"]
         entry[dim] = dim_entry
     trade_scores[key] = entry
 
@@ -155,11 +267,16 @@ def _run_ai_score(db: Session, row: DailyReview, day: date, trade_ids: list[int]
         raise HTTPException(502, f"AI 打分失败: {exc}") from exc
 
     trade_scores = json.loads(row.trade_scores or "{}")
-    _merge_trade_score_items(trade_scores, result.get("trades") or [])
+    items = _normalize_ai_trade_items(result, trade_ids)
+    merged = _merge_trade_score_items(trade_scores, items, trade_ids)
+    if trade_ids and merged == 0:
+        raise HTTPException(502, "AI 未返回有效的逐笔评分，请重试")
     scores = _aggregate_daily_scores(trade_scores)
 
     if trade_ids is None and result.get("daily_summary"):
         row.ai_summary = result.get("daily_summary", "")
+    elif isinstance(result.get("daily_summary"), str) and result.get("daily_summary", "").strip():
+        row.ai_summary = result.get("daily_summary", "").strip()
     else:
         built = _build_trade_summaries_text(db, day, trade_scores)
         if built:
@@ -168,7 +285,12 @@ def _run_ai_score(db: Session, row: DailyReview, day: date, trade_ids: list[int]
     row.trade_scores = json.dumps(trade_scores, ensure_ascii=False)
     row.scores = json.dumps(scores, ensure_ascii=False)
     db.commit()
-    return {"trade_scores": trade_scores, "scores": scores, "summary": row.ai_summary}
+    return {
+        "trade_scores": trade_scores,
+        "scores": scores,
+        "summary": row.ai_summary,
+        "merged_count": merged,
+    }
 
 
 def _run_ai_score_t_group(db: Session, row: DailyReview, day: date, code: str, trade_ids: list[int]) -> dict:
@@ -188,7 +310,8 @@ def _run_ai_score_t_group(db: Session, row: DailyReview, day: date, code: str, t
 
     trade_scores = json.loads(row.trade_scores or "{}")
     _merge_group_score(trade_scores, code, trade_ids, result)
-    _merge_trade_score_items(trade_scores, result.get("trades") or [])
+    items = _normalize_ai_trade_items(result, trade_ids)
+    merged = _merge_trade_score_items(trade_scores, items, trade_ids)
     scores = _aggregate_daily_scores(trade_scores)
     built = _build_trade_summaries_text(db, day, trade_scores)
     group_summary = result.get("group_summary") or result.get("daily_summary") or ""
@@ -201,7 +324,12 @@ def _run_ai_score_t_group(db: Session, row: DailyReview, day: date, code: str, t
     row.trade_scores = json.dumps(trade_scores, ensure_ascii=False)
     row.scores = json.dumps(scores, ensure_ascii=False)
     db.commit()
-    return {"trade_scores": trade_scores, "scores": scores, "summary": row.ai_summary}
+    return {
+        "trade_scores": trade_scores,
+        "scores": scores,
+        "summary": row.ai_summary,
+        "merged_count": merged,
+    }
 
 
 def _daily_dict(r: DailyReview) -> dict:
@@ -245,7 +373,18 @@ def get_daily(day: date, db: Session = Depends(get_db)):
     ]
     data["t_groups"] = _detect_t_groups(trades)
     snap = db.query(Snapshot).filter(Snapshot.snap_date == day).first()
-    data["snapshot"] = snap.total_assets if snap else None
+    if snap:
+        positions = json.loads(snap.positions or "[]")
+        if not isinstance(positions, list):
+            positions = []
+        data["snapshot"] = {
+            "total_assets": snap.total_assets,
+            "available_cash": snap.available_cash,
+            "position_value": snap.position_value,
+            "positions": positions,
+        }
+    else:
+        data["snapshot"] = None
     return data
 
 
@@ -253,8 +392,8 @@ class DailyIn(BaseModel):
     market_observation: str = ""
     decision_review: str = ""
     mistakes: str = ""
-    scores: dict = {}
-    trade_scores: dict = {}
+    scores: dict | None = None
+    trade_scores: dict | None = None
     next_market_forecast: str = ""
     next_watchlist: list = []
     next_position_plan: str = ""
@@ -267,8 +406,10 @@ def save_daily(day: date, body: DailyIn, db: Session = Depends(get_db)):
     row.market_observation = body.market_observation
     row.decision_review = body.decision_review
     row.mistakes = body.mistakes
-    row.scores = json.dumps(body.scores, ensure_ascii=False)
-    row.trade_scores = json.dumps(body.trade_scores, ensure_ascii=False)
+    if body.scores is not None:
+        row.scores = json.dumps(body.scores, ensure_ascii=False)
+    if body.trade_scores is not None:
+        row.trade_scores = json.dumps(body.trade_scores, ensure_ascii=False)
     row.next_market_forecast = body.next_market_forecast
     row.next_watchlist = json.dumps(body.next_watchlist, ensure_ascii=False)
     row.next_position_plan = body.next_position_plan

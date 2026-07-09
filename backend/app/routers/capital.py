@@ -1,3 +1,4 @@
+import json
 from datetime import date
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -69,10 +70,36 @@ class FlowIn(BaseModel):
     note: str = ""
 
 
+class PositionIn(BaseModel):
+    code: str | None = None
+    name: str | None = None
+    qty: int | None = None
+    price: float | None = None
+    market_value: float | None = None
+
+
 class SnapshotIn(BaseModel):
     snap_date: date
     total_assets: float
     note: str = ""
+    positions: list[PositionIn] = []
+    available_cash: float | None = None
+    position_value: float | None = None
+
+
+def _snapshot_dict(row: Snapshot) -> dict:
+    positions = json.loads(row.positions or "[]")
+    if not isinstance(positions, list):
+        positions = []
+    return {
+        "id": row.id,
+        "snap_date": row.snap_date.isoformat(),
+        "total_assets": row.total_assets,
+        "available_cash": row.available_cash,
+        "position_value": row.position_value,
+        "positions": positions,
+        "note": row.note,
+    }
 
 
 @router.get("/flows")
@@ -110,23 +137,37 @@ def delete_flow(flow_id: int, db: Session = Depends(get_db)):
 @router.get("/snapshots")
 def list_snapshots(db: Session = Depends(get_db)):
     rows = db.query(Snapshot).order_by(Snapshot.snap_date.desc()).all()
-    return [
-        {"id": r.id, "snap_date": r.snap_date.isoformat(),
-         "total_assets": r.total_assets, "note": r.note}
-        for r in rows
-    ]
+    return [_snapshot_dict(r) for r in rows]
 
 
 @router.post("/snapshots")
 def upsert_snapshot(body: SnapshotIn, db: Session = Depends(get_db)):
     if body.total_assets < 0:
         raise HTTPException(400, "总资产不能为负")
+    positions = [_normalize_position(p.model_dump()) for p in body.positions]
+    positions = [p for p in positions if p.get("code") or p.get("name")]
+    position_value = body.position_value
+    if position_value is None and positions:
+        position_value = round(
+            sum(p["market_value"] for p in positions if p.get("market_value") is not None),
+            2,
+        ) or None
     row = db.query(Snapshot).filter(Snapshot.snap_date == body.snap_date).first()
     if row is None:
-        row = Snapshot(snap_date=body.snap_date, total_assets=body.total_assets, note=body.note)
+        row = Snapshot(
+            snap_date=body.snap_date,
+            total_assets=body.total_assets,
+            available_cash=body.available_cash,
+            position_value=position_value,
+            positions=json.dumps(positions, ensure_ascii=False),
+            note=body.note,
+        )
         db.add(row)
     else:
         row.total_assets = body.total_assets
+        row.available_cash = body.available_cash
+        row.position_value = position_value
+        row.positions = json.dumps(positions, ensure_ascii=False)
         row.note = body.note
     db.commit()
     return {"id": row.id}

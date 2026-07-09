@@ -66,8 +66,9 @@ def estimate_snapshot(db: Session, snap_date: date) -> dict:
         position_value += mv
         position_details.append({
             "code": code,
+            "name": (market_svc.lookup_by_code(code) or {}).get("name") or "",
             "qty": qty,
-            "close": close,
+            "price": close,
             "market_value": mv,
         })
 

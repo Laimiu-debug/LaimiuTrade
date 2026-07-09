@@ -51,9 +51,10 @@ def list_trades(db: Session = Depends(get_db)):
 @router.post("")
 def add_trade(body: TradeIn, db: Session = Depends(get_db)):
     _validate(body)
+    code, name = market_svc.resolve_stock(body.code.strip(), body.name.strip())
     fees = fees_svc.compute_fees(db, body.side, body.price, body.qty)
     row = Trade(
-        trade_date=body.trade_date, code=body.code.strip(), name=body.name.strip(),
+        trade_date=body.trade_date, code=code, name=name or body.name.strip(),
         side=body.side, price=body.price, qty=body.qty, note=body.note, **fees,
     )
     db.add(row)
@@ -68,9 +69,10 @@ def update_trade(trade_id: int, body: TradeIn, db: Session = Depends(get_db)):
     if row is None:
         raise HTTPException(404, "交易不存在")
     fees = fees_svc.compute_fees(db, body.side, body.price, body.qty)
+    code, name = market_svc.resolve_stock(body.code.strip(), body.name.strip())
     row.trade_date = body.trade_date
-    row.code = body.code.strip()
-    row.name = body.name.strip()
+    row.code = code
+    row.name = name or body.name.strip()
     row.side = body.side
     row.price = body.price
     row.qty = body.qty
@@ -219,8 +221,9 @@ def update_pending(pending_id: int, body: PendingConfirm, db: Session = Depends(
     if side is None:
         raise HTTPException(400, "side 必须是 buy/sell")
     row.trade_date = body.trade_date
-    row.code = body.code.strip()
-    row.name = body.name.strip()
+    code, name = market_svc.resolve_stock(body.code.strip(), body.name.strip())
+    row.code = code
+    row.name = name or body.name.strip()
     row.side = side
     row.price = body.price
     row.qty = body.qty

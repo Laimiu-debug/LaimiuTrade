@@ -934,6 +934,43 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
 .trade-score-empty { font-size: 12px; padding: 4px 0 2px; }
 .journal-snapshot-note { margin-top: 14px; font-size: 12px; }
 
+.snap-card-list { display: flex; flex-direction: column; gap: 10px; }
+.snap-card {
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.snap-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.snap-card-date { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.snap-card-total { font-size: 18px; font-weight: 600; color: var(--gold); }
+.snap-card-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.snap-card-meta {
+  display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 12px;
+}
+.snap-card-positions {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.snap-pos-row {
+  display: grid;
+  grid-template-columns: 72px 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.journal-snap-mini { margin-top: 0; background: var(--surface-1); }
+.journal-snap-mini .snap-card-total { font-size: 15px; }
+
 .trade-analysis-list { display: flex; flex-direction: column; gap: 10px; }
 .trade-analysis-item {
   padding: 10px 12px;

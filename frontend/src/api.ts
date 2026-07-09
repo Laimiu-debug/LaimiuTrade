@@ -122,6 +122,21 @@ export interface WatchItem {
   action: string;
 }
 
+export interface SnapshotPosition {
+  code?: string;
+  name?: string;
+  qty?: number;
+  price?: number;
+  market_value?: number;
+}
+
+export interface SnapshotInfo {
+  total_assets: number;
+  available_cash?: number | null;
+  position_value?: number | null;
+  positions: SnapshotPosition[];
+}
+
 export interface DailyReview {
   review_date: string;
   market_observation: string;
@@ -137,7 +152,7 @@ export interface DailyReview {
   next_risk_plan: string;
   trades: { id: number; code: string; name: string; side: string; price: number; qty: number; fees: number }[];
   t_groups: TGroup[];
-  snapshot: number | null;
+  snapshot: SnapshotInfo | null;
 }
 
 export interface FlashCard {

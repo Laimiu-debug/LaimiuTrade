@@ -55,6 +55,14 @@ def ensure_schema() -> None:
         if "trade_scores" not in cols:
             conn.execute(text("ALTER TABLE daily_reviews ADD COLUMN trade_scores TEXT DEFAULT '{}'"))
 
+        snap_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(snapshots)"))}
+        if "positions" not in snap_cols:
+            conn.execute(text("ALTER TABLE snapshots ADD COLUMN positions TEXT DEFAULT '[]'"))
+        if "available_cash" not in snap_cols:
+            conn.execute(text("ALTER TABLE snapshots ADD COLUMN available_cash REAL"))
+        if "position_value" not in snap_cols:
+            conn.execute(text("ALTER TABLE snapshots ADD COLUMN position_value REAL"))
+
 
 def get_db():
     db: Session = SessionLocal()

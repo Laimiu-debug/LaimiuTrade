@@ -247,12 +247,17 @@ export default function Journal() {
   const [selectedTradeIds, setSelectedTradeIds] = useState<number[]>([]);
   const scoreLockRef = useRef(false);
   const focusAfterLoadRef = useRef<{ tradeId?: number | null; groupId?: string | null } | null>(null);
+  const loadSeqRef = useRef(0);
+  const [loading, setLoading] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [saving, setSaving] = useState(false);
   const imgRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback((d: string): Promise<void> => {
+    const seq = ++loadSeqRef.current;
     return api.get<DailyReview>(`/api/reviews/daily/${d}`).then(res => {
+      if (seq !== loadSeqRef.current) return;
+      if (res.review_date !== d) return;
       const normalized = { ...res, t_groups: res.t_groups ?? [] };
       setData(normalized);
       const keep = focusAfterLoadRef.current;
@@ -267,26 +272,69 @@ export default function Journal() {
         focusAfterLoadRef.current = null;
       }
     }).catch(e => {
-      toast(String(e));
+      if (seq === loadSeqRef.current) toast(String(e));
       throw e;
     });
   }, [toast]);
 
   useEffect(() => {
+    setData(null);
+    setLoading(true);
     setFocusedTradeId(null);
     setFocusedGroupId(null);
     setSelectedTradeIds([]);
-    load(day);
+    load(day).finally(() => setLoading(false));
   }, [day, load]);
 
-  const patch = (p: Partial<DailyReview>) => setData(d => (d ? { ...d, ...p } : d));
+  const patch = (p: Partial<DailyReview>) => {
+    setData(d => (d && d.review_date === day ? { ...d, ...p } : d));
+  };
+
+  type ScoreApiResult = {
+    trade_scores: Record<string, TradeScoreBundle>;
+    scores: Record<string, ScoreEntry>;
+    summary: string;
+    merged_count?: number;
+  };
+
+  const applyScoreResult = (result: ScoreApiResult) => {
+    patch({
+      trade_scores: result.trade_scores,
+      scores: result.scores,
+      ai_summary: result.summary,
+    });
+  };
+
+  const saveTextsForAi = async () => {
+    if (!data) return;
+    await api.put(`/api/reviews/daily/${day}`, {
+      market_observation: data.market_observation,
+      decision_review: data.decision_review,
+      mistakes: data.mistakes,
+      next_market_forecast: data.next_market_forecast,
+      next_watchlist: data.next_watchlist,
+      next_position_plan: data.next_position_plan,
+      next_risk_plan: data.next_risk_plan,
+    });
+  };
 
   const persistAndRefresh = async (
     message: string,
     keep?: { tradeId?: number | null; groupId?: string | null },
+    result?: ScoreApiResult,
   ) => {
-    if (keep) focusAfterLoadRef.current = keep;
-    await load(day);
+    if (keep?.groupId) {
+      setFocusedGroupId(keep.groupId);
+      setFocusedTradeId(null);
+    } else if (keep?.tradeId != null) {
+      setFocusedTradeId(keep.tradeId);
+      setFocusedGroupId(null);
+    }
+    if (result) {
+      applyScoreResult(result);
+    } else {
+      await load(day);
+    }
     toast(message);
   };
 
@@ -338,17 +386,23 @@ export default function Journal() {
     scoreLockRef.current = true;
     setScoringId('all');
     try {
-      await save(true);
+      await saveTextsForAi();
       const unscored = data.trades.filter(t => !tradeHasAnalysis(data.trade_scores?.[String(t.id)] ?? {}));
       const targets = unscored.length > 0 ? unscored : data.trades;
-      for (const t of targets) {
-        setScoringId(t.id);
-        focusTrade(t.id);
-        await api.post(`/api/reviews/daily/${day}/ai-score/${t.id}`);
+      focusTrade(targets[0]?.id ?? data.trades[0].id);
+      const result = await api.post<ScoreApiResult>(
+        `/api/reviews/daily/${day}/ai-score/batch`,
+        { trade_ids: targets.map(t => t.id) },
+      );
+      if (result.merged_count === 0) {
+        toast('AI 未返回有效评分，请重试');
+        return;
       }
-      await persistAndRefresh(`已完成 ${targets.length} 笔交易 AI 分析，已自动保存`, {
-        tradeId: targets[targets.length - 1]?.id ?? null,
-      });
+      await persistAndRefresh(
+        `已完成 ${result.merged_count ?? targets.length} 笔交易 AI 分析，已自动保存`,
+        { tradeId: targets[0]?.id ?? null },
+        result,
+      );
     } catch (e) { toast(String(e)); } finally {
       scoreLockRef.current = false;
       setScoringId(null);
@@ -361,9 +415,13 @@ export default function Journal() {
     setScoringId(tradeId);
     focusTrade(tradeId);
     try {
-      await save(true);
-      await api.post(`/api/reviews/daily/${day}/ai-score/${tradeId}`);
-      await persistAndRefresh('此笔交易 AI 分析完成，已自动保存', { tradeId });
+      await saveTextsForAi();
+      const result = await api.post<ScoreApiResult>(`/api/reviews/daily/${day}/ai-score/${tradeId}`);
+      if (result.merged_count === 0) {
+        toast('AI 未返回有效评分，请重试');
+        return;
+      }
+      await persistAndRefresh('此笔交易 AI 分析完成，已自动保存', { tradeId }, result);
     } catch (e) { toast(String(e)); } finally {
       scoreLockRef.current = false;
       setScoringId(null);
@@ -377,11 +435,20 @@ export default function Journal() {
     setScoringId('batch');
     focusTrade(selectedTradeIds[0]);
     try {
-      await save(true);
-      await api.post(`/api/reviews/daily/${day}/ai-score/batch`, { trade_ids: selectedTradeIds });
-      await persistAndRefresh(`已分析选中的 ${selectedTradeIds.length} 笔交易，已自动保存`, {
-        tradeId: selectedTradeIds[0],
-      });
+      await saveTextsForAi();
+      const result = await api.post<ScoreApiResult>(
+        `/api/reviews/daily/${day}/ai-score/batch`,
+        { trade_ids: selectedTradeIds },
+      );
+      if (result.merged_count === 0) {
+        toast('AI 未返回有效评分，请重试');
+        return;
+      }
+      await persistAndRefresh(
+        `已分析选中的 ${result.merged_count ?? selectedTradeIds.length} 笔交易，已自动保存`,
+        { tradeId: selectedTradeIds[0] },
+        result,
+      );
     } catch (e) { toast(String(e)); } finally {
       scoreLockRef.current = false;
       setScoringId(null);
@@ -394,12 +461,12 @@ export default function Journal() {
     setScoringId('t-group');
     focusGroup(group.id);
     try {
-      await save(true);
-      await api.post(`/api/reviews/daily/${day}/ai-score/t-group`, {
+      await saveTextsForAi();
+      const result = await api.post<ScoreApiResult>(`/api/reviews/daily/${day}/ai-score/t-group`, {
         code: group.code,
         trade_ids: group.trade_ids,
       });
-      await persistAndRefresh(`「${group.name}」做T 分析完成，已自动保存`, { groupId: group.id });
+      await persistAndRefresh(`「${group.name}」做T 分析完成，已自动保存`, { groupId: group.id }, result);
     } catch (e) { toast(String(e)); } finally {
       scoreLockRef.current = false;
       setScoringId(null);
@@ -511,7 +578,11 @@ export default function Journal() {
         <h3>Trading MS 每日复盘 · {day}</h3>
       </div>
 
-      {data && (
+      {loading && !data && (
+        <div className="card"><Empty text="加载中…" /></div>
+      )}
+
+      {data && data.review_date === day && (
         <>
           <div className="grid grid-2">
             <div className="card">
@@ -578,8 +649,38 @@ export default function Journal() {
                 </div>
               )}
 
-              <div className="muted journal-snapshot-note">
-                收盘总资产：{data.snapshot != null ? `¥${fmtMoney(data.snapshot)}` : '未录入（到资金账本补录）'}
+              <div className="journal-snapshot-note">
+                {data.snapshot ? (
+                  <div className="snap-card journal-snap-mini">
+                    <div className="snap-card-head">
+                      <div>
+                        <div className="muted" style={{ fontSize: 12 }}>收盘快照</div>
+                        <div className="snap-card-total mono">¥{fmtMoney(data.snapshot.total_assets)}</div>
+                      </div>
+                      <div className="snap-card-meta" style={{ margin: 0 }}>
+                        {data.snapshot.available_cash != null && (
+                          <span className="muted mono">现金 ¥{fmtMoney(data.snapshot.available_cash)}</span>
+                        )}
+                        {data.snapshot.position_value != null && (
+                          <span className="muted mono">持仓 ¥{fmtMoney(data.snapshot.position_value)}</span>
+                        )}
+                      </div>
+                    </div>
+                    {(data.snapshot.positions?.length ?? 0) > 0 && (
+                      <div className="snap-card-positions">
+                        {data.snapshot.positions.map((p, i) => (
+                          <div className="snap-pos-row" key={`${p.code ?? i}-${i}`}>
+                            <span className="mono">{p.code}</span>
+                            <span>{p.name ?? '—'}</span>
+                            <span className="mono muted">{p.qty != null ? `${p.qty}股` : ''}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <span className="muted">未录入收盘快照（到资金账本补录）</span>
+                )}
               </div>
             </div>
 
@@ -617,16 +718,16 @@ export default function Journal() {
             </div>
           </div>
 
-          <div className="card" style={{ marginTop: 18 }}>
+          <div className="card" style={{ marginTop: 18 }} key={day}>
             <h3 className="card-title">复盘正文</h3>
             <label className="field"><span>盘面观察 · 大盘 / 板块 / 市场情绪</span>
-              <textarea value={data.market_observation} onChange={e => patch({ market_observation: e.target.value })} placeholder="今天市场发生了什么？" />
+              <textarea key={`${day}-market`} value={data.market_observation} onChange={e => patch({ market_observation: e.target.value })} placeholder="今天市场发生了什么？" />
             </label>
             <label className="field"><span>决策复盘 · 每笔操作的理由与对错</span>
-              <textarea value={data.decision_review} onChange={e => patch({ decision_review: e.target.value })} placeholder="为什么买？为什么卖？现在看对了还是错了？" />
+              <textarea key={`${day}-decision`} value={data.decision_review} onChange={e => patch({ decision_review: e.target.value })} placeholder="为什么买？为什么卖？现在看对了还是错了？" />
             </label>
             <label className="field"><span>错误与教训</span>
-              <textarea value={data.mistakes} onChange={e => patch({ mistakes: e.target.value })} placeholder="今天犯了什么错？下次如何避免？" />
+              <textarea key={`${day}-mistakes`} value={data.mistakes} onChange={e => patch({ mistakes: e.target.value })} placeholder="今天犯了什么错？下次如何避免？" />
             </label>
 
             <div className="row no-print">

@@ -9,13 +9,22 @@ const FLOW_KIND_OPTIONS = [
 ];
 
 interface FlowRow { id: number; flow_date: string; kind: string; amount: number; note: string }
-interface SnapRow { id: number; snap_date: string; total_assets: number; note: string }
+interface SnapPosition { code?: string; name?: string; qty?: number; price?: number; market_value?: number }
+interface SnapRow {
+  id: number;
+  snap_date: string;
+  total_assets: number;
+  available_cash?: number | null;
+  position_value?: number | null;
+  positions: SnapPosition[];
+  note: string;
+}
 interface AccountImportPreview {
   snap_date: string;
   total_assets: number | null;
   available_cash: number | null;
   position_value?: number | null;
-  positions: { code?: string; name?: string; qty?: number; price?: number; market_value?: number }[];
+  positions: SnapPosition[];
 }
 
 const KIND_LABEL: Record<string, string> = { initial: '初始资金', deposit: '入金', withdraw: '出金' };
@@ -31,6 +40,7 @@ export default function Capital() {
 
   const [flowForm, setFlowForm] = useState({ flow_date: today(), kind: 'deposit', amount: '', note: '' });
   const [snapForm, setSnapForm] = useState({ snap_date: today(), total_assets: '', note: '' });
+  const [expandedSnapId, setExpandedSnapId] = useState<number | null>(null);
 
   const reload = useCallback(() => {
     api.get<FlowRow[]>('/api/capital/flows').then(setFlows).catch(() => {});
@@ -54,7 +64,14 @@ export default function Capital() {
     const assets = parseFloat(snapForm.total_assets);
     if (Number.isNaN(assets) || assets < 0) { toast('请输入有效总资产'); return; }
     try {
-      await api.post('/api/capital/snapshots', { snap_date: snapForm.snap_date, total_assets: assets, note: snapForm.note });
+      await api.post('/api/capital/snapshots', {
+        snap_date: snapForm.snap_date,
+        total_assets: assets,
+        note: snapForm.note,
+        positions: importPreview?.positions ?? [],
+        available_cash: importPreview?.available_cash ?? null,
+        position_value: importPreview?.position_value ?? null,
+      });
       setSnapForm({ ...snapForm, total_assets: '', note: '' });
       setImportPreview(null);
       toast('快照已保存');
@@ -72,6 +89,7 @@ export default function Capital() {
         total_assets?: number;
         cash?: number;
         position_value?: number;
+        positions?: SnapPosition[];
         reason?: string;
       }>(`/api/capital/estimate?date=${snapForm.snap_date}`);
       if (!est.ok) {
@@ -83,6 +101,13 @@ export default function Capital() {
         snap_date: est.snap_date ?? snapForm.snap_date,
         total_assets: String(est.total_assets ?? ''),
         note: est.message ?? '',
+      });
+      setImportPreview({
+        snap_date: est.snap_date ?? snapForm.snap_date,
+        total_assets: est.total_assets ?? null,
+        available_cash: est.cash ?? null,
+        position_value: est.position_value ?? null,
+        positions: est.positions ?? [],
       });
       toast(`已填入推算值：现金 ¥${fmtMoney(est.cash ?? 0)} + 持仓 ¥${fmtMoney(est.position_value ?? 0)}`);
     } catch (e) { toast(String(e)); } finally {
@@ -196,22 +221,59 @@ export default function Capital() {
             </div>
           )}
           {snaps.length === 0 ? <Empty text="收盘后上传持仓截图，或从交易推算总资产" /> : (
-            <table>
-              <thead><tr><th>日期</th><th style={{ textAlign: 'right' }}>总资产</th><th /></tr></thead>
-              <tbody>
-                {snaps.slice(0, 12).map(s => (
-                  <tr key={s.id}>
-                    <td>{s.snap_date}</td>
-                    <td style={{ textAlign: 'right' }} className="mono">¥{fmtMoney(s.total_assets)}</td>
-                    <td style={{ textAlign: 'right' }}>
-                      <button className="danger-ghost" onClick={async () => {
-                        await api.del(`/api/capital/snapshots/${s.id}`); reload();
-                      }}>删除</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="snap-card-list">
+              {snaps.slice(0, 20).map(s => {
+                const expanded = expandedSnapId === s.id;
+                const positions = s.positions ?? [];
+                return (
+                  <div className="snap-card" key={s.id}>
+                    <div className="snap-card-head">
+                      <div>
+                        <div className="snap-card-date">{s.snap_date}</div>
+                        <div className="snap-card-total mono">¥{fmtMoney(s.total_assets)}</div>
+                      </div>
+                      <div className="snap-card-actions">
+                        {positions.length > 0 && (
+                          <button className="ghost" style={{ fontSize: 12 }}
+                            onClick={() => setExpandedSnapId(expanded ? null : s.id)}>
+                            {expanded ? '收起' : `${positions.length} 只持仓`}
+                          </button>
+                        )}
+                        <button className="danger-ghost" onClick={async () => {
+                          await api.del(`/api/capital/snapshots/${s.id}`); reload();
+                        }}>删除</button>
+                      </div>
+                    </div>
+                    <div className="snap-card-meta">
+                      {s.available_cash != null && (
+                        <span className="muted mono">现金 ¥{fmtMoney(s.available_cash)}</span>
+                      )}
+                      {s.position_value != null && (
+                        <span className="muted mono">持仓 ¥{fmtMoney(s.position_value)}</span>
+                      )}
+                      {positions.length > 0 && s.position_value == null && (
+                        <span className="muted">{positions.length} 只标的</span>
+                      )}
+                      {s.note && <span className="muted">{s.note}</span>}
+                    </div>
+                    {(expanded || positions.length <= 3) && positions.length > 0 && (
+                      <div className="snap-card-positions">
+                        {positions.map((p, i) => (
+                          <div className="snap-pos-row" key={`${p.code ?? i}-${i}`}>
+                            <span className="mono">{p.code ?? '—'}</span>
+                            <span>{p.name ?? '—'}</span>
+                            <span className="mono muted">{p.qty != null ? `${p.qty}股` : '—'}</span>
+                            <span className="mono muted">
+                              {p.market_value != null ? `¥${fmtMoney(p.market_value)}` : p.price != null ? p.price.toFixed(3) : '—'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
 

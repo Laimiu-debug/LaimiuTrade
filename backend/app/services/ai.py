@@ -173,6 +173,9 @@ def score_trades(
     trade_block = "\n".join(t["line"] for t in trade_lines)
     other_block = "\n".join(other_lines) if other_lines else "（无）"
     scope = "以下指定交易" if trade_ids else "以下每一笔交易"
+    id_hint = ""
+    if len(trades) == 1:
+        id_hint = f"\n**重要**：本次仅评价 1 笔交易，JSON 中 trades[0].id 必须为整数 {trades[0].id}，scores 各维度必须含 score 与 comment。\n"
     t_hint = ""
     if _is_t_trading(trades):
         code = trades[0].code
@@ -185,7 +188,7 @@ def score_trades(
 """
 
     prompt = f"""你是一位严格的 A 股交易教练。请对{scope}**分别**按 6 个维度打分（0-10 整数），每条维度附 25-40 字点评；并给每笔交易一句整体总评。
-{t_hint}
+{id_hint}{t_hint}
 ## 日期
 {review_date.isoformat()}
 
