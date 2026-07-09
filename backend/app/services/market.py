@@ -128,6 +128,65 @@ def get_daily(db: Session, code: str, limit: int = 120) -> dict:
     return {"source": None, "code": code, "klines": [], "errors": errors}
 
 
+# ---------- 股票搜索 ----------
+
+_stock_cache: list[dict[str, str]] | None = None
+
+
+def _load_stock_list() -> list[dict[str, str]]:
+    global _stock_cache
+    if _stock_cache is not None:
+        return _stock_cache
+    try:
+        import akshare as ak  # noqa: PLC0415
+
+        df = ak.stock_info_a_code_name()
+        _stock_cache = [
+            {"code": str(row["code"]).zfill(6), "name": str(row["name"])}
+            for _, row in df.iterrows()
+        ]
+    except Exception:  # noqa: BLE001
+        _stock_cache = []
+    return _stock_cache
+
+
+def search_stocks(query: str, limit: int = 12) -> list[dict[str, str]]:
+    """按代码或名称模糊匹配 A 股列表。"""
+    q = query.strip()
+    if not q:
+        return []
+    stocks = _load_stock_list()
+    q_lower = q.lower()
+    q_digits = "".join(ch for ch in q if ch.isdigit())
+
+    scored: list[tuple[int, dict[str, str]]] = []
+    for item in stocks:
+        code, name = item["code"], item["name"]
+        score = -1
+        if q_digits and code == q_digits.zfill(6):
+            score = 100
+        elif q_digits and code.startswith(q_digits):
+            score = 80 - len(code)
+        elif q_lower in name.lower():
+            score = 60
+        elif q_lower in code:
+            score = 50
+        if score >= 0:
+            scored.append((score, item))
+
+    scored.sort(key=lambda x: (-x[0], x[1]["code"]))
+    seen: set[str] = set()
+    results: list[dict[str, str]] = []
+    for _, item in scored:
+        if item["code"] in seen:
+            continue
+        seen.add(item["code"])
+        results.append(item)
+        if len(results) >= limit:
+            break
+    return results
+
+
 def market_context_text(db: Session, codes: list[str], day: date) -> str:
     """给 AI 打分用的行情上下文：大盘 + 涉及个股当日与近5日表现。"""
     lines: list[str] = []

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
-import { useToast } from '../components';
+import { NumberInput, useToast } from '../components';
 
 type SettingsMap = Record<string, string> & { ai_score_api_key_set?: boolean; ai_ocr_api_key_set?: boolean };
 
@@ -10,9 +10,34 @@ export default function Settings() {
   const [scoreKeySet, setScoreKeySet] = useState(false);
   const [ocrKeySet, setOcrKeySet] = useState(false);
   const [dataDir, setDataDir] = useState('');
-  const [newDir, setNewDir] = useState('');
+  const [pickDir, setPickDir] = useState('');
+  const [targetDir, setTargetDir] = useState('');
+  const [targetNote, setTargetNote] = useState('');
   const [moving, setMoving] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [testing, setTesting] = useState<'' | 'score' | 'ocr'>('');
+
+  const refreshTargetPreview = useCallback(async (dir: string) => {
+    const trimmed = dir.trim();
+    if (!trimmed) {
+      setTargetDir('');
+      setTargetNote('');
+      return;
+    }
+    try {
+      const r = await api.post<{ target_dir: string; note: string }>('/api/system/preview-data-dir', { target_dir: trimmed });
+      setTargetDir(r.target_dir);
+      setTargetNote(r.note);
+    } catch (e) {
+      setTargetDir('');
+      setTargetNote(String(e).replace(/^Error:\s*/, ''));
+    }
+  }, []);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => { refreshTargetPreview(pickDir); }, 300);
+    return () => window.clearTimeout(t);
+  }, [pickDir, refreshTargetPreview]);
 
   useEffect(() => {
     api.get<SettingsMap>('/api/settings').then(v => {
@@ -40,14 +65,28 @@ export default function Settings() {
     } catch (e) { toast(String(e)); }
   };
 
+  const pickFolder = async () => {
+    setPicking(true);
+    try {
+      const r = await api.get<{ path: string | null; cancelled: boolean }>('/api/system/pick-folder');
+      if (r.cancelled || !r.path) return;
+      setPickDir(r.path);
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setPicking(false);
+    }
+  };
+
   const moveData = async () => {
-    const target = newDir.trim();
-    if (!target) { toast('请填写新的数据目录路径'); return; }
-    if (!window.confirm(`将把数据迁移到「${target}」并需要重启程序生效，确认继续？`)) return;
+    const parent = pickDir.trim();
+    if (!parent) { toast('请先选择目标文件夹'); return; }
+    if (!targetDir) { toast(targetNote || '目标路径无效'); return; }
+    if (!window.confirm(`将把数据迁移到：\n${targetDir}\n\n迁移后需重启程序生效，确认继续？`)) return;
     setMoving(true);
     try {
-      await api.post('/api/system/move-data', { target_dir: target });
-      toast('迁移完成，程序即将退出，请重新启动');
+      const r = await api.post<{ new_dir: string }>('/api/system/move-data', { target_dir: parent });
+      toast(`迁移完成：${r.new_dir}，程序即将退出，请重新启动`);
       setTimeout(() => window.location.reload(), 1800);
     } catch (e) { toast(String(e)); } finally { setMoving(false); }
   };
@@ -77,10 +116,10 @@ export default function Settings() {
         <h3 className="card-title">胜利目标</h3>
         <div className="grid grid-2">
           <label className="field"><span>节点总数（默认 50）</span>
-            <input type="number" min="1" value={values.node_count ?? ''} onChange={e => set('node_count', e.target.value)} />
+            <NumberInput value={values.node_count ?? ''} onChange={v => set('node_count', v)} />
           </label>
           <label className="field"><span>每节点涨幅 %（默认 30，即净值阶梯 ×1.3ⁿ）</span>
-            <input type="number" min="1" value={values.wave_pct ?? ''} onChange={e => set('wave_pct', e.target.value)} />
+            <NumberInput value={values.wave_pct ?? ''} onChange={v => set('wave_pct', v)} />
           </label>
         </div>
         <div className="muted">修改后所有节点判定、进度条、耗时统计立即按新目标重算，历史数据不受影响。</div>
@@ -165,18 +204,45 @@ export default function Settings() {
 
       <div className="card" style={{ marginTop: 18 }}>
         <h3 className="card-title">数据存储位置</h3>
-        <div className="muted" style={{ marginBottom: 12 }}>
-          当前：<span className="mono">{dataDir || '—'}</span>
+        <div className="data-dir-panel">
+          <div className="data-dir-current">
+            <span className="data-dir-label">当前位置</span>
+            <div className="data-dir-path">{dataDir || '—'}</div>
+          </div>
+          <div>
+            <span className="data-dir-label">迁移到新位置</span>
+            <div className="row" style={{ marginTop: 6 }}>
+              <input
+                placeholder="点击「浏览…」选择，或手动粘贴路径"
+                style={{ flex: 1, minWidth: 240 }}
+                value={pickDir}
+                onChange={e => setPickDir(e.target.value)}
+              />
+              <button type="button" onClick={pickFolder} disabled={picking || moving}>
+                {picking ? '选择中…' : '浏览…'}
+              </button>
+              <button className="primary" onClick={moveData} disabled={moving || !targetDir}>
+                {moving ? '迁移中…' : '迁移并重启'}
+              </button>
+            </div>
+            {targetDir && targetDir !== pickDir && (
+              <div className="data-dir-preview">
+                实际存储路径：<strong>{targetDir}</strong>
+                <br />{targetNote}
+              </div>
+            )}
+            {targetDir && targetDir === pickDir && targetNote && (
+              <div className="data-dir-preview">{targetNote}</div>
+            )}
+            {!targetDir && targetNote && pickDir.trim() && (
+              <div className="data-dir-preview" style={{ borderColor: 'rgba(255,107,107,0.35)', background: 'rgba(255,107,107,0.08)', color: 'var(--up)' }}>
+                {targetNote}
+              </div>
+            )}
+          </div>
         </div>
-        <div className="row">
-          <input placeholder="新的数据目录（绝对路径，如 D:\LaimiuData）" style={{ flex: 1, minWidth: 240 }}
-            value={newDir} onChange={e => setNewDir(e.target.value)} />
-          <button className="primary" onClick={moveData} disabled={moving}>
-            {moving ? '迁移中…' : '迁移并重启'}
-          </button>
-        </div>
-        <div className="muted" style={{ marginTop: 10 }}>
-          把数据库、上传截图、日志迁移到新目录（需空目录），迁移后需重新启动程序生效。换电脑时拷走该目录即可。
+        <div className="muted" style={{ marginTop: 12 }}>
+          选择文件夹后，若目录非空将自动在其下创建 <span className="mono">TradingMS-data</span> 子文件夹。换电脑时拷走数据目录即可。
         </div>
       </div>
     </div>

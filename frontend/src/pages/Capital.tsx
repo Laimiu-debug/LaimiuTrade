@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, fmtMoney, today } from '../api';
-import { Empty, useToast } from '../components';
+import { Empty, useToast, DateInput, NumberInput } from '../components';
 
 interface FlowRow { id: number; flow_date: string; kind: string; amount: number; note: string }
 interface SnapRow { id: number; snap_date: string; total_assets: number; note: string }
@@ -65,11 +65,10 @@ export default function Capital() {
         <div className="card">
           <h3 className="card-title">每日收盘快照</h3>
           <div className="row" style={{ marginBottom: 16 }}>
-            <input type="date" style={{ width: 150 }} value={snapForm.snap_date}
-              onChange={e => setSnapForm({ ...snapForm, snap_date: e.target.value })} />
-            <input type="number" placeholder="收盘总资产（现金+持仓市值）" style={{ flex: 1, minWidth: 140 }}
+            <DateInput value={snapForm.snap_date} onChange={v => setSnapForm({ ...snapForm, snap_date: v })} style={{ width: 150 }} />
+            <NumberInput placeholder="收盘总资产（现金+持仓市值）" style={{ flex: 1, minWidth: 140 }}
               value={snapForm.total_assets}
-              onChange={e => setSnapForm({ ...snapForm, total_assets: e.target.value })} />
+              onChange={v => setSnapForm({ ...snapForm, total_assets: v })} />
             <button className="primary" onClick={addSnap}>保存</button>
           </div>
           {snaps.length === 0 ? <Empty text="每个交易日收盘后，记一笔总资产" /> : (
@@ -95,17 +94,16 @@ export default function Capital() {
         <div className="card">
           <h3 className="card-title">出入金流水</h3>
           <div className="row" style={{ marginBottom: 16 }}>
-            <input type="date" style={{ width: 150 }} value={flowForm.flow_date}
-              onChange={e => setFlowForm({ ...flowForm, flow_date: e.target.value })} />
+            <DateInput value={flowForm.flow_date} onChange={v => setFlowForm({ ...flowForm, flow_date: v })} style={{ width: 150 }} />
             <select style={{ width: 110 }} value={flowForm.kind}
               onChange={e => setFlowForm({ ...flowForm, kind: e.target.value })}>
               <option value="initial">初始资金</option>
               <option value="deposit">入金</option>
               <option value="withdraw">出金</option>
             </select>
-            <input type="number" placeholder="金额" style={{ flex: 1, minWidth: 100 }}
+            <NumberInput placeholder="金额" style={{ flex: 1, minWidth: 100 }}
               value={flowForm.amount}
-              onChange={e => setFlowForm({ ...flowForm, amount: e.target.value })} />
+              onChange={v => setFlowForm({ ...flowForm, amount: v })} />
             <button className="primary" onClick={addFlow}>记录</button>
           </div>
           {flows.length === 0 ? <Empty text="暂无流水" /> : (

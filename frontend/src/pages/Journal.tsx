@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtMoney, today, SCORE_DIMS, type DailyReview, type ScoreEntry, type WatchItem } from '../api';
-import { Empty, SideTag, useToast } from '../components';
+import { Empty, SideTag, useToast, DateInput, StockPicker } from '../components';
 
 export default function Journal() {
   const toast = useToast();
@@ -77,7 +77,7 @@ export default function Journal() {
           <div className="page-sub">复盘是交易者的第二战场</div>
         </div>
         <div className="row no-print">
-          <input type="date" style={{ width: 150 }} value={day} onChange={e => setDay(e.target.value)} />
+          <DateInput value={day} onChange={setDay} style={{ width: 150 }} />
           <button onClick={() => window.print()}>导出 PDF</button>
           <button className="primary" onClick={() => save()} disabled={saving}>{saving ? '保存中…' : '保存'}</button>
         </div>
@@ -194,8 +194,12 @@ export default function Journal() {
             </div>
             {watchlist.length === 0 ? <Empty text="明天重点盯谁？触发什么条件做什么？" /> : watchlist.map((w, i) => (
               <div className="row" key={i} style={{ marginBottom: 8 }}>
-                <input placeholder="代码" style={{ width: 90 }} value={w.code} onChange={e => setWatch(i, { code: e.target.value })} />
-                <input placeholder="名称" style={{ width: 100 }} value={w.name} onChange={e => setWatch(i, { name: e.target.value })} />
+                <StockPicker
+                  code={w.code}
+                  name={w.name}
+                  onSelect={(code, name) => setWatch(i, { code, name })}
+                  style={{ flex: 2, minWidth: 180 }}
+                />
                 <input placeholder="触发条件（如：放量站上20日线）" style={{ flex: 2, minWidth: 140 }} value={w.condition} onChange={e => setWatch(i, { condition: e.target.value })} />
                 <input placeholder="动作（如：3成仓介入）" style={{ flex: 1, minWidth: 100 }} value={w.action} onChange={e => setWatch(i, { action: e.target.value })} />
                 <button className="danger-ghost no-print" onClick={() => patch({ next_watchlist: watchlist.filter((_, idx) => idx !== i) })}>×</button>

@@ -18,6 +18,7 @@ from ..models import (
     CapitalFlow, DailyReview, FlashCard, MonthlyReview, Snapshot, Trade, WeeklyReview,
 )
 from ..services import ai as ai_svc
+from ..services import folder_dialog
 from ..services import market as market_svc
 from ..services import netvalue, rounds as rounds_svc
 from ..services import settings as settings_svc
@@ -39,19 +40,57 @@ class MoveDataIn(BaseModel):
     target_dir: str
 
 
+DATA_SUBDIR = "TradingMS-data"
+
+
+def _resolve_migration_target(raw: str) -> tuple[Path, str]:
+    """解析迁移目标：空目录直接用，非空目录自动使用子文件夹。"""
+    base = Path(raw).expanduser().resolve()
+    if base == DATA_DIR.resolve():
+        raise HTTPException(400, "目标目录与当前数据目录相同")
+    if base == ROOT_DIR.resolve():
+        raise HTTPException(400, "不能使用程序根目录作为数据目录")
+
+    if not base.exists():
+        return base, "将创建新目录"
+
+    if not any(base.iterdir()):
+        return base, "使用所选空目录"
+
+    sub = base / DATA_SUBDIR
+    if sub.exists() and any(sub.iterdir()):
+        if sub.resolve() == DATA_DIR.resolve():
+            raise HTTPException(400, "该位置已是当前数据目录")
+        raise HTTPException(
+            400,
+            f"子目录「{DATA_SUBDIR}」已存在且非空，请更换位置或先清空该文件夹",
+        )
+    return sub, f"所选目录非空，将自动使用子文件夹 {DATA_SUBDIR}"
+
+
+@router.get("/system/pick-folder")
+def pick_folder():
+    """弹出系统文件夹选择框（Windows）。"""
+    path = folder_dialog.pick_folder("选择数据存储位置")
+    if not path:
+        return {"path": None, "cancelled": True}
+    return {"path": path, "cancelled": False}
+
+
+@router.post("/system/preview-data-dir")
+def preview_data_dir(body: MoveDataIn):
+    """预览迁移后的实际目录路径。"""
+    target, note = _resolve_migration_target(body.target_dir)
+    return {"target_dir": str(target), "note": note}
+
+
 @router.post("/system/move-data")
 def move_data(body: MoveDataIn):
     """把数据目录迁移到新位置，写入 data_location.txt，需重启生效。"""
-    target = Path(body.target_dir).expanduser().resolve()
-    if target == DATA_DIR.resolve():
-        raise HTTPException(400, "目标目录与当前数据目录相同")
-    if target == ROOT_DIR.resolve():
-        raise HTTPException(400, "不能使用程序根目录作为数据目录")
-
+    target, _note = _resolve_migration_target(body.target_dir)
     target.mkdir(parents=True, exist_ok=True)
     if any(target.iterdir()):
-        # 避免迁移到一个已有同名数据库的目录造成覆盖
-        raise HTTPException(400, "目标目录非空，请选择一个空目录或先清空")
+        raise HTTPException(400, "目标目录非空，无法迁移")
 
     # 关闭数据库连接，确保 SQLite 文件落盘可移动
     engine.dispose()
@@ -177,6 +216,11 @@ def test_ai(body: TestAIIn, db: Session = Depends(get_db)):
 
 
 # ---------- 行情 ----------
+
+@router.get("/market/search/stocks")
+def search_stocks(q: str = "", limit: int = 12):
+    return market_svc.search_stocks(q, limit=min(limit, 20))
+
 
 @router.get("/market/{code}")
 def market_daily(code: str, limit: int = 120, db: Session = Depends(get_db)):

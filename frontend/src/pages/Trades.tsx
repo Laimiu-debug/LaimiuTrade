@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtMoney, fmtPct, today, type RoundRow, type RoundStats, type TradeRow } from '../api';
-import { Empty, SideTag, Stat, useToast } from '../components';
+import { Empty, SideTag, Stat, useToast, DateInput, NumberInput, StockPicker } from '../components';
 
 interface PendingRow { id: number; trade_date: string; code: string; name: string; side: string; price: number; qty: number }
 
@@ -102,15 +102,19 @@ export default function Trades() {
       <div className="card" style={{ marginBottom: 18 }}>
         <h3 className="card-title">手动录入</h3>
         <div className="row">
-          <input type="date" style={{ width: 140 }} value={form.trade_date} onChange={e => setForm({ ...form, trade_date: e.target.value })} />
-          <input placeholder="代码" style={{ width: 90 }} value={form.code} onChange={e => setForm({ ...form, code: e.target.value })} />
-          <input placeholder="名称" style={{ width: 100 }} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+          <DateInput value={form.trade_date} onChange={v => setForm({ ...form, trade_date: v })} style={{ width: 150 }} />
+          <StockPicker
+            code={form.code}
+            name={form.name}
+            onSelect={(code, name) => setForm({ ...form, code, name })}
+            style={{ width: 200 }}
+          />
           <select style={{ width: 80 }} value={form.side} onChange={e => setForm({ ...form, side: e.target.value })}>
             <option value="buy">买入</option>
             <option value="sell">卖出</option>
           </select>
-          <input type="number" placeholder="价格" style={{ width: 90 }} value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} />
-          <input type="number" placeholder="数量(股)" style={{ width: 100 }} value={form.qty} onChange={e => setForm({ ...form, qty: e.target.value })} />
+          <NumberInput placeholder="价格" style={{ width: 90 }} value={form.price} onChange={v => setForm({ ...form, price: v })} />
+          <NumberInput placeholder="数量(股)" style={{ width: 100 }} value={form.qty} onChange={v => setForm({ ...form, qty: v })} />
           <button className="primary" onClick={addTrade}>记录</button>
         </div>
       </div>

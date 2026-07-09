@@ -309,6 +309,23 @@ input, select, textarea {
   transition: border-color var(--dur) ease-out;
   width: 100%;
 }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  position: absolute;
+  right: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--gold);
@@ -323,6 +340,103 @@ label.field > span {
   margin-bottom: 6px;
   letter-spacing: 0.05em;
 }
+
+/* 日期选择器、数字输入 */
+.input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.input-wrap > input {
+  flex: 1;
+  min-width: 0;
+  padding-right: 38px;
+}
+.input-wrap.date-input > input {
+  color-scheme: light dark;
+}
+.input-addon {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+}
+.input-addon:hover { color: var(--gold); background: var(--gold-dim); }
+.input-addon svg { width: 16px; height: 16px; }
+.input-number { font-variant-numeric: tabular-nums; }
+
+/* 股票搜索 */
+.stock-picker { position: relative; min-width: 160px; }
+.stock-picker > input { width: 100%; }
+.stock-picker-dropdown {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+.stock-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.stock-picker-item:hover { background: var(--surface-2); }
+.stock-picker-item.muted { cursor: default; }
+.stock-picker-item.muted:hover { background: transparent; }
+.stock-picker-item .mono { color: var(--gold-bright); flex-shrink: 0; }
+
+/* 数据目录 */
+.data-dir-panel { display: flex; flex-direction: column; gap: 16px; }
+.data-dir-current {
+  padding: 14px 16px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.data-dir-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.1em;
+  margin-bottom: 6px;
+}
+.data-dir-path { font-family: var(--font-mono); font-size: 13px; word-break: break-all; }
+.data-dir-preview {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--gold-dim);
+  border: 1px solid rgba(212, 175, 106, 0.25);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.data-dir-preview strong { color: var(--gold-bright); font-weight: 500; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th {
