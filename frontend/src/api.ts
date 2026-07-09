@@ -127,6 +127,7 @@ export interface SnapshotPosition {
   name?: string;
   qty?: number;
   price?: number;
+  close?: number;
   market_value?: number;
 }
 
@@ -137,10 +138,16 @@ export interface SnapshotInfo {
   positions: SnapshotPosition[];
 }
 
+export interface RehearsalBaseline {
+  cash: number;
+  total_assets: number;
+}
+
 export interface PositionRehearsal {
   code: string;
   name: string;
   qty: number;
+  close?: number;
   note?: string;
 }
 
@@ -180,6 +187,7 @@ export interface DailyReview {
   next_risk_plan: string;
   next_position_rehearsal: PositionRehearsal[];
   today_positions: SnapshotPosition[];
+  rehearsal_baseline: RehearsalBaseline;
   prev_rehearsal: PositionRehearsal[];
   rehearsal_compare: RehearsalCompareRow[];
   trades: { id: number; code: string; name: string; side: string; price: number; qty: number; fees: number }[];

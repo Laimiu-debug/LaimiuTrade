@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   api, fmtMoney, today, SCORE_DIMS,
-  type DailyReview, type PositionRehearsal, type ScoreEntry, type TGroup, type TradeScoreBundle, type WatchItem,
+  type DailyReview, type PositionRehearsal, type ScoreEntry, type SnapshotPosition,
+  type TGroup, type TradeScoreBundle, type WatchItem,
 } from '../api';
 import { Empty, NumberInput, SideTag, useToast, DateInput, StockPicker } from '../components';
 
@@ -246,6 +247,26 @@ const REHEARSAL_STATUS: Record<string, string> = {
   less_than_planned: '少于预演',
 };
 
+function positionClose(p: SnapshotPosition | PositionRehearsal): number | null {
+  if (p.close != null && p.close > 0) return p.close;
+  if ('price' in p && p.price != null && p.price > 0) return p.price;
+  if ('market_value' in p && p.market_value != null && p.qty != null && p.qty > 0) {
+    return Math.round((p.market_value / p.qty) * 1000) / 1000;
+  }
+  return null;
+}
+
+async function fetchCloseOnDay(code: string, day: string): Promise<number | null> {
+  try {
+    const r = await api.get<{ klines: { date: string; close: number }[] }>(`/api/market/${code}?limit=120`);
+    const valid = r.klines.filter(k => k.date <= day);
+    if (valid.length === 0) return null;
+    return valid[valid.length - 1].close;
+  } catch {
+    return null;
+  }
+}
+
 function PrintTextBlock({ label, text }: { label: string; text: string }) {
   if (!text.trim()) return null;
   return (
@@ -360,6 +381,26 @@ function JournalPrintReport({ data }: { data: DailyReview; day: string }) {
         <PrintTextBlock label="大盘预判" text={data.next_market_forecast} />
         <PrintTextBlock label="仓位计划" text={data.next_position_plan} />
         <PrintTextBlock label="风险预案" text={data.next_risk_plan} />
+        {(data.next_watchlist?.length ?? 0) > 0 && (
+          <>
+            <div className="print-text-label" style={{ marginTop: 12 }}>明日观察标的</div>
+            <table className="print-table">
+              <thead>
+                <tr><th>代码</th><th>名称</th><th>触发条件</th><th>计划动作</th></tr>
+              </thead>
+              <tbody>
+                {data.next_watchlist.map((w, i) => (
+                  <tr key={i}>
+                    <td className="mono">{w.code || '—'}</td>
+                    <td>{w.name || '—'}</td>
+                    <td>{w.condition || '—'}</td>
+                    <td>{w.action || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
       </div>
     </div>
   );
@@ -392,6 +433,10 @@ export default function Journal() {
         t_groups: res.t_groups ?? [],
         next_position_rehearsal: res.next_position_rehearsal ?? [],
         today_positions: res.today_positions ?? [],
+        rehearsal_baseline: res.rehearsal_baseline ?? {
+          cash: res.snapshot?.available_cash ?? 0,
+          total_assets: res.snapshot?.total_assets ?? 0,
+        },
         prev_rehearsal: res.prev_rehearsal ?? [],
         rehearsal_compare: res.rehearsal_compare ?? [],
       };
@@ -675,10 +720,62 @@ export default function Journal() {
     if (!data) return;
     const base = (data.today_positions ?? [])
       .filter(p => p.code && (p.qty ?? 0) > 0)
-      .map(p => ({ code: p.code!, name: p.name ?? '', qty: p.qty ?? 0, note: '' }));
+      .map(p => ({
+        code: p.code!,
+        name: p.name ?? '',
+        qty: p.qty ?? 0,
+        close: positionClose(p) ?? undefined,
+        note: '',
+      }));
     setRehearsal(base);
     toast('已从今日持仓复制，可调整数量（0=清仓）或添加新开仓');
   };
+
+  const pickRehearsalStock = async (i: number, code: string, name: string) => {
+    const fromToday = data?.today_positions?.find(p => p.code === code);
+    let close = fromToday ? positionClose(fromToday) : null;
+    if (close == null) {
+      close = await fetchCloseOnDay(code, day);
+    }
+    setRehearsalRow(i, { code, name, close: close ?? undefined });
+  };
+
+  const rehearsalStats = useMemo(() => {
+    if (!data) return null;
+    const baselineCash = data.rehearsal_baseline?.cash
+      ?? data.snapshot?.available_cash
+      ?? 0;
+    const todayByCode = new Map<string, number>();
+    const closeByCode = new Map<string, number>();
+    for (const p of data.today_positions ?? []) {
+      if (!p.code) continue;
+      todayByCode.set(p.code, p.qty ?? 0);
+      const c = positionClose(p);
+      if (c != null) closeByCode.set(p.code, c);
+    }
+    let cashDelta = 0;
+    let projectedMv = 0;
+    const missingCodes: string[] = [];
+    for (const r of rehearsal) {
+      if (!r.code) continue;
+      const close = r.close ?? closeByCode.get(r.code) ?? null;
+      if (close == null) {
+        missingCodes.push(r.code);
+        continue;
+      }
+      const todayQty = todayByCode.get(r.code) ?? 0;
+      cashDelta += (todayQty - r.qty) * close;
+      projectedMv += r.qty * close;
+    }
+    const remainingCash = baselineCash + cashDelta;
+    return {
+      baselineCash,
+      remainingCash,
+      projectedMv,
+      projectedTotal: remainingCash + projectedMv,
+      missingCodes,
+    };
+  }, [data, rehearsal]);
 
   const renderTradeCard = (t: DayTrade, nested = false) => {
     if (!data) return null;
@@ -921,8 +1018,41 @@ export default function Journal() {
               </div>
             </div>
             <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
-              预演明日收盘持仓：数量改为 0 表示清仓；保存后次日可对比预演与实际。
+              预演明日收盘持仓：按当日收盘价估算资金占用；数量改为 0 表示清仓。
             </p>
+
+            {rehearsalStats && (
+              <div className="rehearsal-funds-bar">
+                <div className="rehearsal-funds-item">
+                  <span className="rehearsal-funds-label">今日可用</span>
+                  <span className="mono">¥{fmtMoney(rehearsalStats.baselineCash)}</span>
+                </div>
+                <div className="rehearsal-funds-item highlight">
+                  <span className="rehearsal-funds-label">预演剩余现金</span>
+                  <span className={`mono${rehearsalStats.remainingCash < 0 ? ' neg' : ''}`}>
+                    ¥{fmtMoney(rehearsalStats.remainingCash)}
+                  </span>
+                </div>
+                <div className="rehearsal-funds-item">
+                  <span className="rehearsal-funds-label">预演持仓市值</span>
+                  <span className="mono">¥{fmtMoney(rehearsalStats.projectedMv)}</span>
+                </div>
+                <div className="rehearsal-funds-item">
+                  <span className="rehearsal-funds-label">预演总资产</span>
+                  <span className="mono">¥{fmtMoney(rehearsalStats.projectedTotal)}</span>
+                </div>
+              </div>
+            )}
+            {rehearsalStats && rehearsalStats.remainingCash < 0 && (
+              <div className="alert" style={{ marginBottom: 12, padding: '8px 12px', fontSize: 12 }}>
+                预演剩余现金为负，请减少买入或增加卖出。
+              </div>
+            )}
+            {rehearsalStats && rehearsalStats.missingCodes.length > 0 && (
+              <div className="muted" style={{ marginBottom: 12, fontSize: 12 }}>
+                以下标的缺少收盘价，无法计入资金：{rehearsalStats.missingCodes.join('、')}
+              </div>
+            )}
 
             {(data.rehearsal_compare?.length ?? 0) > 0 && (
               <div className="rehearsal-compare-block" style={{ marginBottom: 16 }}>
@@ -950,13 +1080,17 @@ export default function Journal() {
               <div style={{ marginBottom: 14 }}>
                 <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>今日收盘持仓（基准）</div>
                 <div className="snap-card-positions">
-                  {data.today_positions.map((p, i) => (
-                    <div className="snap-pos-row" key={`today-${p.code}-${i}`}>
-                      <span className="mono">{p.code}</span>
-                      <span>{p.name ?? '—'}</span>
-                      <span className="mono muted">{p.qty != null ? `${p.qty}股` : '—'}</span>
-                    </div>
-                  ))}
+                    {(data.today_positions ?? []).map((p, i) => {
+                      const c = positionClose(p);
+                      return (
+                      <div className="snap-pos-row" key={`today-${p.code}-${i}`}>
+                        <span className="mono">{p.code}</span>
+                        <span>{p.name ?? '—'}</span>
+                        <span className="mono muted">{p.qty != null ? `${p.qty}股` : '—'}</span>
+                        <span className="mono muted">{c != null ? `@${c.toFixed(3)}` : ''}</span>
+                      </div>
+                      );
+                    })}
                 </div>
               </div>
             )}
@@ -965,23 +1099,49 @@ export default function Journal() {
               <Empty text="点击「从今日持仓复制」开始预演明日仓位变化" />
             ) : (
               <div className="rehearsal-edit-list">
-                {rehearsal.map((r, i) => (
+                {rehearsal.map((r, i) => {
+                  const close = r.close ?? positionClose(r) ?? (r.code
+                    ? positionClose(data.today_positions?.find(p => p.code === r.code) ?? {})
+                    : null);
+                  const mv = close != null ? r.qty * close : null;
+                  const todayQty = data.today_positions?.find(p => p.code === r.code)?.qty ?? 0;
+                  const deltaCash = close != null ? (todayQty - r.qty) * close : null;
+                  return (
                   <div className="row rehearsal-edit-row" key={i} style={{ marginBottom: 8, alignItems: 'flex-end' }}>
                     <StockPicker
                       code={r.code}
                       name={r.name}
-                      onSelect={(code, name) => setRehearsalRow(i, { code, name })}
+                      onSelect={(code, name) => { void pickRehearsalStock(i, code, name); }}
                       style={{ flex: 2, minWidth: 160 }}
                     />
                     <label className="field" style={{ flex: '0 0 100px', margin: 0 }}>
                       <span>预演股数</span>
                       <NumberInput value={String(r.qty)} onChange={v => setRehearsalRow(i, { qty: parseInt(v, 10) || 0 })} />
                     </label>
-                    <input placeholder="备注（清仓/加仓等）" style={{ flex: 1, minWidth: 120 }}
+                    <div className="field" style={{ flex: '0 0 88px', margin: 0 }}>
+                      <span>收盘价</span>
+                      <div className="mono muted" style={{ fontSize: 13, padding: '8px 0' }}>
+                        {close != null ? close.toFixed(3) : '—'}
+                      </div>
+                    </div>
+                    <div className="field" style={{ flex: '0 0 96px', margin: 0 }}>
+                      <span>市值</span>
+                      <div className="mono muted" style={{ fontSize: 13, padding: '8px 0' }}>
+                        {mv != null ? `¥${fmtMoney(mv)}` : '—'}
+                      </div>
+                    </div>
+                    <div className="field" style={{ flex: '0 0 96px', margin: 0 }}>
+                      <span>现金变动</span>
+                      <div className={`mono${deltaCash != null && deltaCash < 0 ? ' neg' : ''}`} style={{ fontSize: 13, padding: '8px 0' }}>
+                        {deltaCash != null ? `${deltaCash >= 0 ? '+' : ''}${fmtMoney(deltaCash)}` : '—'}
+                      </div>
+                    </div>
+                    <input placeholder="备注" style={{ flex: 1, minWidth: 80 }}
                       value={r.note ?? ''} onChange={e => setRehearsalRow(i, { note: e.target.value })} />
                     <button className="danger-ghost" onClick={() => setRehearsal(rehearsal.filter((_, idx) => idx !== i))}>×</button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

@@ -998,6 +998,31 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
   border: 1px solid var(--border);
 }
 .rehearsal-edit-row .field span { font-size: 11px; }
+.rehearsal-funds-bar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.rehearsal-funds-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.rehearsal-funds-item.highlight .mono {
+  color: var(--gold-bright);
+  font-weight: 600;
+  font-size: 15px;
+}
+.rehearsal-funds-label { color: var(--text-3); font-size: 11px; }
+@media (max-width: 720px) {
+  .rehearsal-funds-bar { grid-template-columns: repeat(2, 1fr); }
+}
 
 .trade-analysis-list { display: flex; flex-direction: column; gap: 10px; }
 .trade-analysis-item {

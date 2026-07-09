@@ -365,15 +365,73 @@ def _run_ai_score_t_group(db: Session, row: DailyReview, day: date, code: str, t
     }
 
 
+def _position_close(p: dict) -> float | None:
+    if not isinstance(p, dict):
+        return None
+    for key in ("close", "price"):
+        raw = p.get(key)
+        if raw is not None:
+            try:
+                val = float(raw)
+                if val > 0:
+                    return round(val, 3)
+            except (TypeError, ValueError):
+                pass
+    mv = p.get("market_value")
+    qty = p.get("qty")
+    if mv is not None and qty:
+        try:
+            q = int(qty)
+            if q > 0:
+                return round(float(mv) / q, 3)
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+    return None
+
+
+def _enrich_positions(positions: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for p in positions:
+        if not isinstance(p, dict):
+            continue
+        row = dict(p)
+        close = _position_close(row)
+        if close is not None:
+            row["close"] = close
+        out.append(row)
+    return out
+
+
+def _rehearsal_baseline(db: Session, day: date, snap: Snapshot | None) -> dict:
+    if snap is not None and snap.available_cash is not None:
+        return {
+            "cash": round(float(snap.available_cash), 2),
+            "total_assets": round(float(snap.total_assets), 2),
+        }
+    est = capital_est_svc.estimate_snapshot(db, day)
+    if est.get("ok"):
+        return {
+            "cash": round(float(est.get("cash") or 0), 2),
+            "total_assets": round(float(est.get("total_assets") or 0), 2),
+        }
+    if snap is not None:
+        pv = float(snap.position_value or 0)
+        return {
+            "cash": round(float(snap.total_assets) - pv, 2),
+            "total_assets": round(float(snap.total_assets), 2),
+        }
+    return {"cash": 0.0, "total_assets": 0.0}
+
+
 def _positions_for_day(db: Session, day: date) -> list[dict]:
     snap = db.query(Snapshot).filter(Snapshot.snap_date == day).first()
     if snap:
         positions = json.loads(snap.positions or "[]")
         if isinstance(positions, list) and positions:
-            return positions
+            return _enrich_positions(positions)
     est = capital_est_svc.estimate_snapshot(db, day)
     if est.get("ok") and est.get("positions"):
-        return est["positions"]
+        return _enrich_positions(est["positions"])
     return []
 
 
@@ -467,6 +525,7 @@ def get_daily(day: date, db: Session = Depends(get_db)):
     else:
         data["snapshot"] = None
     data["today_positions"] = _positions_for_day(db, day)
+    data["rehearsal_baseline"] = _rehearsal_baseline(db, day, snap)
     prev_review = (
         db.query(DailyReview)
         .filter(DailyReview.review_date < day)
