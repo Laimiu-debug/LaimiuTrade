@@ -858,6 +858,57 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
 .trade-score-card:hover {
   border-color: rgba(212, 175, 106, 0.45);
 }
+.trade-score-card.nested {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+.trade-select-check {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  cursor: pointer;
+}
+.trade-select-check input { accent-color: var(--gold); }
+
+.trade-t-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  background: var(--surface-2);
+}
+.trade-t-group.active {
+  border-color: rgba(212, 175, 106, 0.5);
+}
+.trade-t-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+.trade-t-group-body { padding-left: 4px; }
+
+.analysis-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.analysis-detail-title { font-size: 15px; font-weight: 600; }
+.analysis-leg-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.analysis-leg-item:last-child { border-bottom: none; }
+.analysis-leg-summary { flex: 1; min-width: 120px; color: var(--text-2); line-height: 1.6; }
 .trade-score-head {
   display: flex;
   align-items: center;

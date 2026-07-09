@@ -45,8 +45,8 @@ def _aggregate_daily_scores(trade_scores: dict) -> dict:
     daily: dict = {}
     for dim in ai_svc.SCORE_DIMENSIONS:
         collected: list[dict] = []
-        for entry in trade_scores.values():
-            if not isinstance(entry, dict):
+        for key, entry in trade_scores.items():
+            if not isinstance(entry, dict) or str(key).startswith("g:"):
                 continue
             dim_entry = entry.get(dim)
             if isinstance(dim_entry, dict) and dim_entry.get("ai") is not None:
@@ -61,6 +61,47 @@ def _aggregate_daily_scores(trade_scores: dict) -> dict:
             "comment": " ".join(comments[:2]),
         }
     return daily
+
+
+def _detect_t_groups(trades: list[Trade]) -> list[dict]:
+    by_code: dict[str, list[Trade]] = {}
+    for t in trades:
+        by_code.setdefault(t.code, []).append(t)
+    groups: list[dict] = []
+    for code, items in by_code.items():
+        sides = {t.side for t in items}
+        if "buy" in sides and "sell" in sides and len(items) >= 2:
+            groups.append({
+                "id": f"t:{code}",
+                "code": code,
+                "name": items[0].name or code,
+                "kind": "t",
+                "trade_ids": [t.id for t in items],
+            })
+    return groups
+
+
+def _group_score_key(code: str) -> str:
+    return f"g:{code}"
+
+
+def _merge_group_score(trade_scores: dict, code: str, trade_ids: list[int], result: dict) -> None:
+    key = _group_score_key(code)
+    entry: dict = trade_scores.get(key) or {}
+    summary = result.get("group_summary") or result.get("daily_summary")
+    if isinstance(summary, str) and summary.strip():
+        entry["_summary"] = {"comment": summary.strip()}
+    entry["_meta"] = {"kind": "t", "code": code, "trade_ids": trade_ids}
+    for dim, val in (result.get("group_scores") or {}).items():
+        if dim not in ai_svc.SCORE_DIMENSIONS or not isinstance(val, dict):
+            continue
+        dim_entry = entry.get(dim) or {}
+        dim_entry["ai"] = val.get("score")
+        dim_entry["comment"] = val.get("comment", "")
+        if dim_entry.get("final") is None:
+            dim_entry["final"] = val.get("score")
+        entry[dim] = dim_entry
+    trade_scores[key] = entry
 
 
 def _build_trade_summaries_text(db: Session, day: date, trade_scores: dict) -> str:
@@ -130,6 +171,39 @@ def _run_ai_score(db: Session, row: DailyReview, day: date, trade_ids: list[int]
     return {"trade_scores": trade_scores, "scores": scores, "summary": row.ai_summary}
 
 
+def _run_ai_score_t_group(db: Session, row: DailyReview, day: date, code: str, trade_ids: list[int]) -> dict:
+    try:
+        result = ai_svc.score_t_group(db, day, {
+            "market_observation": row.market_observation,
+            "decision_review": row.decision_review,
+            "mistakes": row.mistakes,
+            "plan": _plan_from_prev(db, day),
+        }, trade_ids=trade_ids)
+    except ai_svc.AIUnavailable as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"做T AI 打分失败: {exc}") from exc
+
+    trade_scores = json.loads(row.trade_scores or "{}")
+    _merge_group_score(trade_scores, code, trade_ids, result)
+    _merge_trade_score_items(trade_scores, result.get("trades") or [])
+    scores = _aggregate_daily_scores(trade_scores)
+    built = _build_trade_summaries_text(db, day, trade_scores)
+    group_summary = result.get("group_summary") or result.get("daily_summary") or ""
+    if isinstance(group_summary, str) and group_summary.strip():
+        prefix = f"【做T·{code}】{group_summary.strip()}"
+        row.ai_summary = prefix if not built else f"{prefix}\n{built}"
+    elif built:
+        row.ai_summary = built
+
+    row.trade_scores = json.dumps(trade_scores, ensure_ascii=False)
+    row.scores = json.dumps(scores, ensure_ascii=False)
+    db.commit()
+    return {"trade_scores": trade_scores, "scores": scores, "summary": row.ai_summary}
+
+
 def _daily_dict(r: DailyReview) -> dict:
     return {
         "review_date": r.review_date.isoformat(),
@@ -169,6 +243,7 @@ def get_daily(day: date, db: Session = Depends(get_db)):
          "fees": round(t.fee_commission + t.fee_stamp + t.fee_transfer, 2)}
         for t in trades
     ]
+    data["t_groups"] = _detect_t_groups(trades)
     snap = db.query(Snapshot).filter(Snapshot.snap_date == day).first()
     data["snapshot"] = snap.total_assets if snap else None
     return data
@@ -247,6 +322,25 @@ def ai_score_batch(day: date, body: AiScoreIn, db: Session = Depends(get_db)):
     if not body.trade_ids:
         raise HTTPException(400, "请指定要分析的交易")
     return _run_ai_score(db, row, day, trade_ids=body.trade_ids)
+
+
+class TGroupScoreIn(BaseModel):
+    code: str
+    trade_ids: list[int] = []
+
+
+@router.post("/daily/{day}/ai-score/t-group")
+def ai_score_t_group(day: date, body: TGroupScoreIn, db: Session = Depends(get_db)):
+    row = _get_or_create_daily(db, day)
+    if not body.trade_ids:
+        raise HTTPException(400, "请指定做T涉及的交易")
+    trades = db.query(Trade).filter(Trade.id.in_(body.trade_ids), Trade.trade_date == day).all()
+    if len(trades) != len(set(body.trade_ids)):
+        raise HTTPException(404, "部分交易不存在或不属于该日")
+    code = body.code.strip()
+    if any(t.code != code for t in trades):
+        raise HTTPException(400, "做T交易代码不一致")
+    return _run_ai_score_t_group(db, row, day, code, body.trade_ids)
 
 
 @router.post("/daily/{day}/ai-score/{trade_id}")

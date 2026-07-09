@@ -139,6 +139,17 @@ def _trade_lines_for(trades: list) -> list[dict]:
     ]
 
 
+def _is_t_trading(trades: list) -> bool:
+    """同一标的当日既有买入又有卖出，视为做 T。"""
+    if len(trades) < 2:
+        return False
+    codes = {t.code for t in trades}
+    if len(codes) != 1:
+        return False
+    sides = {t.side for t in trades}
+    return "buy" in sides and "sell" in sides
+
+
 def score_trades(
     db: Session,
     review_date: date,
@@ -162,9 +173,19 @@ def score_trades(
     trade_block = "\n".join(t["line"] for t in trade_lines)
     other_block = "\n".join(other_lines) if other_lines else "（无）"
     scope = "以下指定交易" if trade_ids else "以下每一笔交易"
+    t_hint = ""
+    if _is_t_trading(trades):
+        code = trades[0].code
+        name = trades[0].name or code
+        t_hint = f"""
+## 做T提示
+以上交易为 **{name}({code}) 当日做T**（同日买卖同一标的）。请：
+- 在每笔交易的 summary 和点评中体现做T节奏（低吸高抛/追涨杀跌等）
+- daily_summary 中单独点评做T整体得失与节奏，而非割裂评价各笔
+"""
 
     prompt = f"""你是一位严格的 A 股交易教练。请对{scope}**分别**按 6 个维度打分（0-10 整数），每条维度附 25-40 字点评；并给每笔交易一句整体总评。
-
+{t_hint}
 ## 日期
 {review_date.isoformat()}
 
@@ -196,6 +217,71 @@ def score_trades(
 {{"trades": [{{"id": 交易ID, "summary": "此笔整体40字内", "scores": {{{", ".join(f'"{k}": {{"score": 0, "comment": ""}}' for k in SCORE_DIMENSIONS)}}}}}, ...], "daily_summary": "当日整体80字内（仅评价本次涉及的交易）"}}
 
 必须为「本次需评价的交易」中每笔都输出一项。"""
+
+    content = _chat(db, [{"role": "user", "content": prompt}])
+    return _extract_json(content)
+
+
+def score_t_group(
+    db: Session,
+    review_date: date,
+    review_texts: dict[str, str],
+    trade_ids: list[int],
+) -> dict:
+    """对同一标的当日做T（多笔买卖）做整体评价，并逐笔拆分。"""
+    ctx = _review_context(db, review_date)
+    wanted = set(trade_ids)
+    trades = [t for t in ctx["trades"] if t.id in wanted]
+    if len(trades) < 2 or not _is_t_trading(trades):
+        raise ValueError("做T分析需要同一标的至少一笔买入和一笔卖出")
+    code = trades[0].code
+    name = trades[0].name or code
+    trade_lines = _trade_lines_for(trades)
+    trade_block = "\n".join(t["line"] for t in trade_lines)
+    other_lines = [
+        t["line"] for t in ctx["trade_lines"] if t["id"] not in wanted
+    ]
+    other_block = "\n".join(other_lines) if other_lines else "（无）"
+    dims_desc = "、".join(f"{k}({v})" for k, v in SCORE_DIMENSIONS.items())
+
+    prompt = f"""你是一位严格的 A 股交易教练。以下交易为 **{name}({code}) 当日做T**（同日对同一标的既有买入又有卖出）。
+
+请完成两部分评价：
+1. **做T整体**：从节奏、价差捕捉、仓位控制、情绪纪律等角度，对整次做T操作打 6 维度分并给 80 字内总评
+2. **逐笔拆分**：对每一笔仍分别输出 6 维度分与 40 字内总评（id 必须原样返回）
+
+## 日期
+{review_date.isoformat()}
+
+## 当日行情
+{ctx["market_text"]}
+
+## 账户
+{ctx["asset_line"]}
+
+## 做T涉及交易
+{trade_block}
+
+## 当日其他交易（参考，勿重复评价）
+{other_block}
+
+## 交易者自述（若有）
+盘面观察：{review_texts.get('market_observation') or '（未填写）'}
+决策复盘：{review_texts.get('decision_review') or '（未填写）'}
+错误教训：{review_texts.get('mistakes') or '（未填写）'}
+
+## 评分维度
+{dims_desc}
+
+## 输出要求
+严格输出 JSON：
+{{
+  "group_summary": "做T整体80字内总评",
+  "group_scores": {{{", ".join(f'"{k}": {{"score": 0, "comment": ""}}' for k in SCORE_DIMENSIONS)}}},
+  "trades": [{{"id": 交易ID, "summary": "此笔40字内", "scores": {{{", ".join(f'"{k}": {{"score": 0, "comment": ""}}' for k in SCORE_DIMENSIONS)}}}}}, ...],
+  "daily_summary": "做T整体80字内（可与 group_summary 相同）"
+}}
+必须为做T涉及交易中每笔都输出 trades 一项。"""
 
     content = _chat(db, [{"role": "user", "content": prompt}])
     return _extract_json(content)

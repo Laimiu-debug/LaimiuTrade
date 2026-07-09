@@ -103,7 +103,16 @@ export interface ScoreEntry {
 /** 单笔交易的 AI 评分包，含各维度分与整体总评 */
 export interface TradeScoreBundle {
   _summary?: { comment?: string };
-  [dim: string]: ScoreEntry | { comment?: string } | undefined;
+  _meta?: { kind?: string; code?: string; trade_ids?: number[] };
+  [dim: string]: ScoreEntry | { comment?: string } | { kind?: string; code?: string; trade_ids?: number[] } | undefined;
+}
+
+export interface TGroup {
+  id: string;
+  code: string;
+  name: string;
+  kind: 't';
+  trade_ids: number[];
 }
 
 export interface WatchItem {
@@ -127,6 +136,7 @@ export interface DailyReview {
   next_position_plan: string;
   next_risk_plan: string;
   trades: { id: number; code: string; name: string; side: string; price: number; qty: number; fees: number }[];
+  t_groups: TGroup[];
   snapshot: number | null;
 }
 

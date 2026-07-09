@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   api, fmtMoney, today, SCORE_DIMS,
-  type DailyReview, type ScoreEntry, type TradeScoreBundle, type WatchItem,
+  type DailyReview, type ScoreEntry, type TGroup, type TradeScoreBundle, type WatchItem,
 } from '../api';
 import { Empty, SideTag, useToast, DateInput, StockPicker } from '../components';
+
+type DayTrade = DailyReview['trades'][number];
 
 function tradeSummary(ts: TradeScoreBundle): string {
   const raw = ts._summary;
@@ -36,6 +38,27 @@ function tradeHasAnalysis(ts: TradeScoreBundle) {
     const entry = tradeDimEntry(ts, dim);
     return entry?.ai != null || entry?.final != null || Boolean(entry?.comment);
   });
+}
+
+function groupScoreKey(code: string) {
+  return `g:${code}`;
+}
+
+function organizeSections(trades: DayTrade[], tGroups: TGroup[]) {
+  const seen = new Set<string>();
+  const sections: Array<{ kind: 't'; group: TGroup } | { kind: 'single'; trade: DayTrade }> = [];
+  for (const t of trades) {
+    const group = tGroups.find(g => g.trade_ids.includes(t.id));
+    if (group) {
+      if (!seen.has(group.id)) {
+        seen.add(group.id);
+        sections.push({ kind: 't', group });
+      }
+    } else {
+      sections.push({ kind: 'single', trade: t });
+    }
+  }
+  return sections;
 }
 
 function ScoreDimRows({
@@ -83,26 +106,186 @@ function ScoreDimRows({
   );
 }
 
+function AnalysisDetailPanel({
+  data,
+  focusedTradeId,
+  focusedGroupId,
+  scoringId,
+  onAnalyzeTrade,
+  onAnalyzeGroup,
+  onFocusGroup,
+  onSetTradeScore,
+}: {
+  data: DailyReview;
+  focusedTradeId: number | null;
+  focusedGroupId: string | null;
+  scoringId: number | 'all' | 'batch' | 't-group' | null;
+  onAnalyzeTrade: (id: number) => void;
+  onAnalyzeGroup: (group: TGroup) => void;
+  onFocusGroup: (groupId: string) => void;
+  onSetTradeScore: (tradeId: number, dim: string, value: number) => void;
+}) {
+  const tGroups = data.t_groups ?? [];
+
+  if (focusedGroupId) {
+    const group = tGroups.find(g => g.id === focusedGroupId);
+    if (!group) return <Empty text="做T组合不存在" />;
+    const gs = data.trade_scores?.[groupScoreKey(group.code)] ?? {};
+    const summary = tradeSummary(gs);
+    const avg = tradeAvgScore(gs);
+    const groupTrades = data.trades.filter(t => group.trade_ids.includes(t.id));
+    const analyzing = scoringId === 't-group';
+    return (
+      <div className="analysis-detail">
+        <div className="analysis-detail-head">
+          <span className="tag gold">做T</span>
+          <span className="analysis-detail-title">{group.name}</span>
+          <span className="muted mono">{group.code}</span>
+          {avg != null && <span className="tag gold">均分 {avg}</span>}
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+          含 {groupTrades.length} 笔：{groupTrades.map(t => `${t.side === 'buy' ? '买' : '卖'}${t.qty}@${t.price}`).join(' · ')}
+        </div>
+        {!tradeHasAnalysis(gs) ? (
+          <>
+            <Empty text="尚未分析此做T组合" />
+            <button className="primary no-print" style={{ marginTop: 12 }} disabled={analyzing || scoringId !== null}
+              onClick={() => onAnalyzeGroup(group)}>
+              {analyzing ? '分析中…' : '✦ AI 分析做T'}
+            </button>
+          </>
+        ) : (
+          <>
+            {summary && <div className="trade-score-summary">{summary}</div>}
+            <ScoreDimRows scores={gs as Record<string, ScoreEntry | undefined>} />
+            <button className="ghost no-print" style={{ marginTop: 12 }} disabled={analyzing || scoringId !== null}
+              onClick={() => onAnalyzeGroup(group)}>
+              {analyzing ? '分析中…' : '重新分析做T'}
+            </button>
+            <div className="analysis-detail-sub" style={{ marginTop: 16 }}>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>组合内逐笔</div>
+              {groupTrades.map(t => {
+                const ts = data.trade_scores?.[String(t.id)] ?? {};
+                const legSummary = tradeSummary(ts);
+                return (
+                  <div key={t.id} className="analysis-leg-item">
+                    <SideTag side={t.side} />
+                    <span className="mono muted">{t.price} × {t.qty}</span>
+                    {legSummary && <span className="analysis-leg-summary">{legSummary}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  if (focusedTradeId != null) {
+    const trade = data.trades.find(t => t.id === focusedTradeId);
+    if (!trade) return <Empty text="交易不存在" />;
+    const ts = data.trade_scores?.[String(trade.id)] ?? {};
+    const summary = tradeSummary(ts);
+    const avg = tradeAvgScore(ts);
+    const tGroup = tGroups.find(g => g.trade_ids.includes(trade.id));
+    const analyzing = scoringId === trade.id;
+    const hasScores = tradeHasAnalysis(ts);
+    return (
+      <div className="analysis-detail">
+        <div className="analysis-detail-head">
+          <SideTag side={trade.side} />
+          <span className="analysis-detail-title">{trade.name || trade.code}</span>
+          <span className="muted mono">{trade.code}</span>
+          {avg != null && <span className="tag gold">均分 {avg}</span>}
+        </div>
+        <div className="muted mono" style={{ fontSize: 12, marginBottom: 10 }}>
+          {trade.price} × {trade.qty} · 费用 {trade.fees}
+        </div>
+        {tGroup && (
+          <button className="ghost no-print" style={{ marginBottom: 10, fontSize: 12 }}
+            onClick={() => onFocusGroup(tGroup.id)}>
+            查看做T整体分析 →
+          </button>
+        )}
+        {!hasScores ? (
+          <>
+            <Empty text="尚未分析此笔交易" />
+            <button className="primary no-print" style={{ marginTop: 12 }} disabled={analyzing || scoringId !== null}
+              onClick={() => onAnalyzeTrade(trade.id)}>
+              {analyzing ? '分析中…' : '✦ AI 分析此笔'}
+            </button>
+          </>
+        ) : (
+          <>
+            {summary && <div className="trade-score-summary">{summary}</div>}
+            <ScoreDimRows
+              scores={ts as Record<string, ScoreEntry | undefined>}
+              side={trade.side}
+              onSetScore={(dim, v) => onSetTradeScore(trade.id, dim, v)}
+            />
+            <button className="ghost no-print" style={{ marginTop: 12 }} disabled={analyzing || scoringId !== null}
+              onClick={() => onAnalyzeTrade(trade.id)}>
+              {analyzing ? '分析中…' : '重新分析此笔'}
+            </button>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return <Empty text="点击左侧交易卡片或做T组合，此处显示对应 AI 分析" />;
+}
+
 export default function Journal() {
   const toast = useToast();
   const [day, setDay] = useState(today());
   const [data, setData] = useState<DailyReview | null>(null);
-  const [scoringId, setScoringId] = useState<number | 'all' | null>(null);
+  const [scoringId, setScoringId] = useState<number | 'all' | 'batch' | 't-group' | null>(null);
   const [focusedTradeId, setFocusedTradeId] = useState<number | null>(null);
+  const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
+  const [selectedTradeIds, setSelectedTradeIds] = useState<number[]>([]);
   const scoreLockRef = useRef(false);
+  const focusAfterLoadRef = useRef<{ tradeId?: number | null; groupId?: string | null } | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [saving, setSaving] = useState(false);
   const imgRef = useRef<HTMLInputElement>(null);
 
-  const load = useCallback((d: string) => {
-    api.get<DailyReview>(`/api/reviews/daily/${d}`).then(setData).catch(e => toast(String(e)));
+  const load = useCallback((d: string): Promise<void> => {
+    return api.get<DailyReview>(`/api/reviews/daily/${d}`).then(res => {
+      const normalized = { ...res, t_groups: res.t_groups ?? [] };
+      setData(normalized);
+      const keep = focusAfterLoadRef.current;
+      if (keep) {
+        if (keep.groupId) {
+          setFocusedGroupId(keep.groupId);
+          setFocusedTradeId(null);
+        } else if (keep.tradeId != null) {
+          setFocusedTradeId(keep.tradeId);
+          setFocusedGroupId(null);
+        }
+        focusAfterLoadRef.current = null;
+      }
+    }).catch(e => {
+      toast(String(e));
+      throw e;
+    });
   }, [toast]);
 
-  useEffect(() => { load(day); }, [day, load]);
+  useEffect(() => {
+    setFocusedTradeId(null);
+    setFocusedGroupId(null);
+    setSelectedTradeIds([]);
+    load(day);
+  }, [day, load]);
 
   const patch = (p: Partial<DailyReview>) => setData(d => (d ? { ...d, ...p } : d));
 
-  const persistAndRefresh = async (message: string) => {
+  const persistAndRefresh = async (
+    message: string,
+    keep?: { tradeId?: number | null; groupId?: string | null },
+  ) => {
+    if (keep) focusAfterLoadRef.current = keep;
     await load(day);
     toast(message);
   };
@@ -126,6 +309,29 @@ export default function Journal() {
     } catch (e) { toast(String(e)); } finally { setSaving(false); }
   };
 
+  const focusTrade = (id: number) => {
+    setFocusedTradeId(id);
+    setFocusedGroupId(null);
+  };
+
+  const focusGroup = (groupId: string) => {
+    setFocusedGroupId(groupId);
+    setFocusedTradeId(null);
+  };
+
+  const toggleSelect = (id: number) => {
+    setSelectedTradeIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  };
+
+  const toggleGroupSelect = (group: TGroup) => {
+    const allSelected = group.trade_ids.every(id => selectedTradeIds.includes(id));
+    if (allSelected) {
+      setSelectedTradeIds(prev => prev.filter(id => !group.trade_ids.includes(id)));
+    } else {
+      setSelectedTradeIds(prev => [...new Set([...prev, ...group.trade_ids])]);
+    }
+  };
+
   const aiScoreAll = async () => {
     if (!data?.trades.length) { toast('当日无交易，无法打分'); return; }
     if (scoreLockRef.current) return;
@@ -137,14 +343,12 @@ export default function Journal() {
       const targets = unscored.length > 0 ? unscored : data.trades;
       for (const t of targets) {
         setScoringId(t.id);
-        setFocusedTradeId(t.id);
-        await api.post<{
-          trade_scores: Record<string, TradeScoreBundle>;
-          scores: Record<string, ScoreEntry>;
-          summary: string;
-        }>(`/api/reviews/daily/${day}/ai-score/${t.id}`);
+        focusTrade(t.id);
+        await api.post(`/api/reviews/daily/${day}/ai-score/${t.id}`);
       }
-      await persistAndRefresh(`已完成 ${targets.length} 笔交易 AI 分析，已自动保存`);
+      await persistAndRefresh(`已完成 ${targets.length} 笔交易 AI 分析，已自动保存`, {
+        tradeId: targets[targets.length - 1]?.id ?? null,
+      });
     } catch (e) { toast(String(e)); } finally {
       scoreLockRef.current = false;
       setScoringId(null);
@@ -155,15 +359,47 @@ export default function Journal() {
     if (scoreLockRef.current || scoringId !== null) return;
     scoreLockRef.current = true;
     setScoringId(tradeId);
-    setFocusedTradeId(tradeId);
+    focusTrade(tradeId);
     try {
       await save(true);
-      await api.post<{
-        trade_scores: Record<string, TradeScoreBundle>;
-        scores: Record<string, ScoreEntry>;
-        summary: string;
-      }>(`/api/reviews/daily/${day}/ai-score/${tradeId}`);
-      await persistAndRefresh('此笔交易 AI 分析完成，已自动保存');
+      await api.post(`/api/reviews/daily/${day}/ai-score/${tradeId}`);
+      await persistAndRefresh('此笔交易 AI 分析完成，已自动保存', { tradeId });
+    } catch (e) { toast(String(e)); } finally {
+      scoreLockRef.current = false;
+      setScoringId(null);
+    }
+  };
+
+  const aiScoreSelected = async () => {
+    if (!data || selectedTradeIds.length === 0) { toast('请先勾选要分析的交易'); return; }
+    if (scoreLockRef.current || scoringId !== null) return;
+    scoreLockRef.current = true;
+    setScoringId('batch');
+    focusTrade(selectedTradeIds[0]);
+    try {
+      await save(true);
+      await api.post(`/api/reviews/daily/${day}/ai-score/batch`, { trade_ids: selectedTradeIds });
+      await persistAndRefresh(`已分析选中的 ${selectedTradeIds.length} 笔交易，已自动保存`, {
+        tradeId: selectedTradeIds[0],
+      });
+    } catch (e) { toast(String(e)); } finally {
+      scoreLockRef.current = false;
+      setScoringId(null);
+    }
+  };
+
+  const aiScoreTGroup = async (group: TGroup) => {
+    if (scoreLockRef.current || scoringId !== null) return;
+    scoreLockRef.current = true;
+    setScoringId('t-group');
+    focusGroup(group.id);
+    try {
+      await save(true);
+      await api.post(`/api/reviews/daily/${day}/ai-score/t-group`, {
+        code: group.code,
+        trade_ids: group.trade_ids,
+      });
+      await persistAndRefresh(`「${group.name}」做T 分析完成，已自动保存`, { groupId: group.id });
     } catch (e) { toast(String(e)); } finally {
       scoreLockRef.current = false;
       setScoringId(null);
@@ -220,14 +456,41 @@ export default function Journal() {
     patch({ next_watchlist: next });
   };
 
-  const tradeHasScores = (ts: TradeScoreBundle) =>
-    Object.keys(SCORE_DIMS).some(dim => {
-      const entry = tradeDimEntry(ts, dim);
-      return entry?.ai != null || entry?.final != null || Boolean(entry?.comment);
-    });
+  const renderTradeCard = (t: DayTrade, nested = false) => {
+    if (!data) return null;
+    const ts = data.trade_scores?.[String(t.id)] ?? {};
+    const hasScores = tradeHasAnalysis(ts);
+    const isActive = focusedTradeId === t.id && !focusedGroupId;
+    const checked = selectedTradeIds.includes(t.id);
+    return (
+      <div
+        className={`trade-score-card${isActive ? ' active' : ''}${nested ? ' nested' : ''}`}
+        key={t.id}
+        onClick={() => focusTrade(t.id)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={e => { if (e.key === 'Enter') focusTrade(t.id); }}
+      >
+        <div className="trade-score-head">
+          <label className="trade-select-check no-print" onClick={e => e.stopPropagation()}>
+            <input type="checkbox" checked={checked} onChange={() => toggleSelect(t.id)} />
+          </label>
+          <div className="trade-score-meta">
+            <SideTag side={t.side} />
+            <span className="trade-score-name">{t.name}</span>
+            <span className="muted mono">{t.code}</span>
+            {hasScores && <span className="tag gold" style={{ fontSize: 11 }}>已分析</span>}
+          </div>
+          <span className="trade-score-numbers mono muted">
+            {t.price} × {t.qty} · 费用 {t.fees}
+          </span>
+        </div>
+      </div>
+    );
+  };
 
-  const highlightedTradeId = scoringId !== null && scoringId !== 'all' ? scoringId : focusedTradeId;
-  const analyzedTrades = data?.trades.filter(t => tradeHasAnalysis(data.trade_scores?.[String(t.id)] ?? {})) ?? [];
+  const tGroups = data?.t_groups ?? [];
+  const sections = data ? organizeSections(data.trades, tGroups) : [];
 
   return (
     <div className="fade-in journal-page">
@@ -254,60 +517,61 @@ export default function Journal() {
             <div className="card">
               <div className="page-head" style={{ marginBottom: 12 }}>
                 <h3 className="card-title" style={{ margin: 0 }}>当日交易 · 逐条打分</h3>
-                <button className="ghost no-print" onClick={aiScoreAll}
-                  disabled={scoringId !== null || data.trades.length === 0}>
-                  {scoringId === 'all' ? '分析中…' : '✦ AI 分析全部'}
-                </button>
+                <div className="row" style={{ gap: 8 }}>
+                  {selectedTradeIds.length > 0 && (
+                    <button className="primary" onClick={() => void aiScoreSelected()}
+                      disabled={scoringId !== null}>
+                      {scoringId === 'batch' ? '分析中…' : `✦ 分析选中 (${selectedTradeIds.length})`}
+                    </button>
+                  )}
+                  <button className="ghost no-print" onClick={aiScoreAll}
+                    disabled={scoringId !== null || data.trades.length === 0}>
+                    {scoringId === 'all' ? '分析中…' : '✦ AI 分析全部'}
+                  </button>
+                </div>
               </div>
+
+              {selectedTradeIds.length > 0 && (
+                <div className="row no-print" style={{ marginBottom: 10, gap: 8 }}>
+                  <span className="muted" style={{ fontSize: 12 }}>已选 {selectedTradeIds.length} 笔</span>
+                  <button className="ghost" style={{ fontSize: 12 }} onClick={() => setSelectedTradeIds([])}>清除选择</button>
+                </div>
+              )}
 
               {data.trades.length === 0 ? <Empty text="当日无交易记录" /> : (
                 <div className="trade-score-list">
-                  {data.trades.map(t => {
-                    const ts = data.trade_scores?.[String(t.id)] ?? {};
-                    const hasScores = tradeHasAnalysis(ts);
-                    const summary = tradeSummary(ts);
-                    const isActive = highlightedTradeId === t.id;
+                  {sections.map(section => {
+                    if (section.kind === 'single') {
+                      return renderTradeCard(section.trade);
+                    }
+                    const { group } = section;
+                    const groupActive = focusedGroupId === group.id;
+                    const groupChecked = group.trade_ids.every(id => selectedTradeIds.includes(id));
+                    const groupTrades = data.trades.filter(t => group.trade_ids.includes(t.id));
+                    const gs = data.trade_scores?.[groupScoreKey(group.code)] ?? {};
                     return (
-                      <div
-                        className={`trade-score-card${isActive ? ' active' : ''}`}
-                        key={t.id}
-                        onClick={() => setFocusedTradeId(t.id)}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={e => { if (e.key === 'Enter') setFocusedTradeId(t.id); }}
-                      >
-                        <div className="trade-score-head">
-                          <div className="trade-score-meta">
-                            <SideTag side={t.side} />
-                            <span className="trade-score-name">{t.name}</span>
-                            <span className="muted mono">{t.code}</span>
-                          </div>
-                          <div className="row" style={{ gap: 8 }}>
-                            <span className="trade-score-numbers mono muted">
-                              {t.price} × {t.qty} · 费用 {t.fees}
-                            </span>
-                            <button className="ghost no-print" onClick={e => { e.stopPropagation(); void aiScoreOne(t.id); }}
-                              disabled={scoringId !== null}>
-                              {scoringId === t.id ? '分析中…' : hasScores ? '重新分析' : 'AI 分析此笔'}
-                            </button>
-                          </div>
+                      <div key={group.id} className={`trade-t-group${groupActive ? ' active' : ''}`}>
+                        <div className="trade-t-group-head" onClick={() => focusGroup(group.id)}
+                          role="button" tabIndex={0}
+                          onKeyDown={e => { if (e.key === 'Enter') focusGroup(group.id); }}>
+                          <label className="trade-select-check no-print" onClick={e => e.stopPropagation()}>
+                            <input type="checkbox" checked={groupChecked}
+                              onChange={() => toggleGroupSelect(group)} />
+                          </label>
+                          <span className="tag gold">做T</span>
+                          <span className="trade-score-name">{group.name}</span>
+                          <span className="muted mono">{group.code}</span>
+                          <span className="muted" style={{ fontSize: 12 }}>{groupTrades.length} 笔</span>
+                          {tradeHasAnalysis(gs) && <span className="tag" style={{ fontSize: 11 }}>已分析</span>}
+                          <button className="ghost no-print" style={{ marginLeft: 'auto', fontSize: 12 }}
+                            disabled={scoringId !== null}
+                            onClick={e => { e.stopPropagation(); void aiScoreTGroup(group); }}>
+                            {scoringId === 't-group' && groupActive ? '分析中…' : 'AI 分析做T'}
+                          </button>
                         </div>
-                        {hasScores ? (
-                          <div className="trade-score-body">
-                            {summary && (
-                              <div className="trade-score-summary">{summary}</div>
-                            )}
-                            {tradeHasScores(ts) && (
-                              <ScoreDimRows
-                                scores={ts as Record<string, ScoreEntry | undefined>}
-                                side={t.side}
-                                onSetScore={(dim, v) => setTradeFinalScore(t.id, dim, v)}
-                              />
-                            )}
-                          </div>
-                        ) : (
-                          <div className="muted trade-score-empty">点击「AI 分析此笔」单独评价，或使用「AI 分析全部」</div>
-                        )}
+                        <div className="trade-t-group-body">
+                          {groupTrades.map(t => renderTradeCard(t, true))}
+                        </div>
                       </div>
                     );
                   })}
@@ -320,47 +584,20 @@ export default function Journal() {
             </div>
 
             <div className="card">
-              <h3 className="card-title">逐笔 AI 分析</h3>
+              <h3 className="card-title">AI 分析详情</h3>
               <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
-                已保存的 AI 点评会持久保留，切换日期后可直接查看，无需重复分析
+                点击左侧卡片切换查看；勾选多笔后点「分析选中」可一次性评价
               </p>
-              {analyzedTrades.length === 0 ? (
-                <Empty text="完成逐条 AI 分析后，此处显示每笔交易的点评" />
-              ) : (
-                <div className="trade-analysis-list">
-                  {analyzedTrades.map(t => {
-                    const ts = data.trade_scores?.[String(t.id)] ?? {};
-                    const summary = tradeSummary(ts);
-                    const avg = tradeAvgScore(ts);
-                    const isActive = highlightedTradeId === t.id;
-                    return (
-                      <div
-                        key={t.id}
-                        className={`trade-analysis-item${isActive ? ' active' : ''}`}
-                        onClick={() => setFocusedTradeId(t.id)}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={e => { if (e.key === 'Enter') setFocusedTradeId(t.id); }}
-                      >
-                        <div className="trade-analysis-head">
-                          <SideTag side={t.side} />
-                          <span className="trade-analysis-name">{t.name || t.code}</span>
-                          <span className="muted mono">{t.code}</span>
-                          <span className="trade-analysis-meta mono muted">
-                            {t.price} × {t.qty}
-                          </span>
-                          {avg != null && <span className="tag gold">均分 {avg}</span>}
-                        </div>
-                        {summary ? (
-                          <div className="trade-analysis-summary">{summary}</div>
-                        ) : (
-                          <div className="muted" style={{ fontSize: 12 }}>暂无文字总评，见左侧维度打分</div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              <AnalysisDetailPanel
+                data={data}
+                focusedTradeId={focusedTradeId}
+                focusedGroupId={focusedGroupId}
+                scoringId={scoringId}
+                onAnalyzeTrade={id => void aiScoreOne(id)}
+                onAnalyzeGroup={g => void aiScoreTGroup(g)}
+                onFocusGroup={focusGroup}
+                onSetTradeScore={setTradeFinalScore}
+              />
 
               <h3 className="card-title" style={{ marginTop: 20 }}>整日操作概览</h3>
               <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
@@ -450,4 +687,3 @@ export default function Journal() {
     </div>
   );
 }
-
