@@ -189,27 +189,214 @@ def lookup_by_code(code: str) -> dict[str, str] | None:
     return None
 
 
-def resolve_stock(code: str, name: str) -> tuple[str, str]:
-    """从 OCR/手输的代码或名称尽力解析为标准 6 位代码与名称。"""
+# 券商 App 简称 → 标准代码（截图无 6 位代码时的兜底）
+_OCR_NAME_TO_CODE: dict[str, str] = {
+    "科半导体": "588710",
+    "科创半导体": "588710",
+    "科创半导体设备": "588710",
+    "科创半导体etf": "588710",
+    "科创半导体ETF": "588710",
+    "科创板半导体": "588710",
+    "科创板半导体etf": "588710",
+    "科创板半导体ETF": "588710",
+}
+
+# akshare 未加载时的静态名称
+_STATIC_CODE_NAME: dict[str, str] = {
+    "588710": "科创半导体设备ETF华泰柏瑞",
+    "515400": "大数据ETF富国",
+}
+
+
+def _is_etf_code(code: str) -> bool:
+    return code.startswith(("51", "56", "58", "15", "16"))
+
+
+def _normalize_query_name(name: str) -> str:
+    return name.replace(" ", "").replace("　", "").strip()
+
+
+def _strip_etf_suffix(name: str) -> str:
+    s = _normalize_query_name(name)
+    for w in ("ETF", "etf", "基金", "LOF", "联接"):
+        s = s.replace(w, "")
+    return s
+
+
+def _subsequence_match(query: str, target: str) -> bool:
+    """简称是否为全称的有序子序列（如「科半导体」⊂「科创半导体设备ETF」）。"""
+    q = _strip_etf_suffix(query)
+    if len(q) < 2:
+        return False
+    ti = 0
+    for ch in target:
+        if ti < len(q) and ch == q[ti]:
+            ti += 1
+    return ti == len(q)
+
+
+def _implied_price(
+    price: float | None,
+    qty: int | None,
+    market_value: float | None,
+) -> float | None:
+    if price is not None and price > 0:
+        return price
+    if qty is not None and qty > 0 and market_value is not None and market_value > 0:
+        return market_value / qty
+    return None
+
+
+def _code_name_pair(code: str) -> tuple[str, str] | None:
+    hit = lookup_by_code(code)
+    if hit:
+        return hit["code"], hit["name"]
+    static = _STATIC_CODE_NAME.get(code)
+    if static:
+        return code, static
+    return None
+
+
+def _rank_name_candidates(name: str, pool: list[dict[str, str]]) -> list[tuple[int, dict[str, str]]]:
+    q = _normalize_query_name(name)
+    q_lower = q.lower()
+    q_core = _strip_etf_suffix(name)
+    ranked: list[tuple[int, dict[str, str]]] = []
+    for item in pool:
+        full = item["name"]
+        full_norm = _normalize_query_name(full)
+        full_lower = full_norm.lower()
+        score = -1
+        if full == name or full_norm == q or full_lower == q_lower:
+            score = 200
+        elif q_core and len(q_core) >= 2 and q_core in full_norm:
+            score = 130 + min(len(q_core), 20)
+        elif q and len(q) >= 2 and (q in full_norm or q_lower in full_lower):
+            score = 110 + min(len(q), 15)
+        elif q_core and len(q_core) >= 2 and _subsequence_match(q_core, full_norm):
+            score = 85 + min(len(q_core), 15)
+        elif q and len(q) >= 2 and _subsequence_match(q, full_norm):
+            score = 75 + min(len(q), 12)
+        if score >= 0:
+            if _is_etf_code(item["code"]) and _etf_like_name(name):
+                score += 8
+            ranked.append((score, item))
+    ranked.sort(key=lambda x: (-x[0], x[1]["code"]))
+    return ranked
+
+
+def _etf_like_name(name: str) -> bool:
+    return any(k in name for k in ("ETF", "etf", "基金", "半导体", "科创", "指数", "LOF", "数据"))
+
+
+def _collect_name_candidates(name: str) -> list[dict[str, str]]:
+    seen: set[str] = set()
+    candidates: list[dict[str, str]] = []
+    for hit in search_stocks(name, limit=15):
+        if hit["code"] not in seen:
+            seen.add(hit["code"])
+            candidates.append(hit)
+    q_core = _strip_etf_suffix(name)
+    if len(q_core) <= 10:
+        for item in _load_etf_list():
+            if item["code"] in seen:
+                continue
+            if _subsequence_match(name, item["name"]) or (
+                len(q_core) >= 2 and q_core in _normalize_query_name(item["name"])
+            ):
+                seen.add(item["code"])
+                candidates.append(item)
+    if len(q_core) <= 6:
+        for item in _load_stock_list():
+            if item["code"] in seen:
+                continue
+            if item["name"] == name or (len(q_core) >= 2 and q_core in item["name"]):
+                seen.add(item["code"])
+                candidates.append(item)
+    return candidates
+
+
+def _disambiguate_by_price(
+    candidates: list[dict[str, str]],
+    implied: float,
+    db: Session,
+) -> dict[str, str] | None:
+    best_item: dict[str, str] | None = None
+    best_err = float("inf")
+    for item in candidates[:12]:
+        try:
+            klines = get_daily(db, item["code"], limit=8)["klines"]
+            if not klines:
+                continue
+            close = float(klines[-1]["close"])
+            if close <= 0:
+                continue
+            err = abs(close - implied) / implied
+            if err < best_err:
+                best_err = err
+                best_item = item
+        except Exception:  # noqa: BLE001
+            continue
+    if best_item is not None and best_err < 0.25:
+        return best_item
+    return None
+
+
+def resolve_stock(
+    code: str,
+    name: str,
+    *,
+    price: float | None = None,
+    market_value: float | None = None,
+    qty: int | None = None,
+    db: Session | None = None,
+) -> tuple[str, str]:
+    """从 OCR/手输的代码或名称解析为标准 6 位代码与名称。
+
+    券商截图常只有简称（如「科半导体」），与基金全称不是子串关系；
+    采用子序列匹配 + 行情价格消歧，不确定时留空 code 避免误匹配。
+    """
     code = (code or "").strip()
     name = (name or "").strip()
     digits = "".join(ch for ch in code if ch.isdigit())
 
     if len(digits) == 6:
-        hit = lookup_by_code(digits)
-        if hit:
-            return hit["code"], hit["name"]
+        pair = _code_name_pair(digits.zfill(6))
+        if pair:
+            return pair
+
+    if not digits and name:
+        alias_key = _normalize_query_name(name)
+        alias_code = _OCR_NAME_TO_CODE.get(name) or _OCR_NAME_TO_CODE.get(alias_key)
+        if alias_code:
+            pair = _code_name_pair(alias_code)
+            if pair:
+                return pair
 
     if name:
-        hits = search_stocks(name, limit=8)
-        for hit in hits:
-            if hit["name"] == name:
-                return hit["code"], hit["name"]
-        for hit in hits:
-            if name in hit["name"] or hit["name"] in name:
-                return hit["code"], hit["name"]
-        if len(hits) == 1:
-            return hits[0]["code"], hits[0]["name"]
+        candidates = _collect_name_candidates(name)
+        ranked = _rank_name_candidates(name, candidates)
+        if ranked:
+            top_score = ranked[0][0]
+            top_group = [item for sc, item in ranked if sc >= top_score - 5][:8]
+            implied = _implied_price(price, qty, market_value)
+
+            if db is not None and implied is not None and len(top_group) > 1:
+                picked = _disambiguate_by_price(top_group, implied, db)
+                if picked:
+                    return picked["code"], picked["name"]
+
+            if len(top_group) == 1:
+                return top_group[0]["code"], top_group[0]["name"]
+
+            if len(ranked) >= 2 and ranked[0][0] - ranked[1][0] >= 18:
+                return ranked[0][1]["code"], ranked[0][1]["name"]
+
+            if top_score >= 130:
+                return ranked[0][1]["code"], ranked[0]["name"]
+
+            # 多个候选分数接近：不强行匹配，保留简称供用户手选
+            return "", name
 
     if digits:
         hits = search_stocks(digits, limit=3)
@@ -229,17 +416,24 @@ def search_stocks(query: str, limit: int = 12) -> list[dict[str, str]]:
     stocks = _all_securities()
     q_lower = q.lower()
     q_digits = "".join(ch for ch in q if ch.isdigit())
+    q_norm = _normalize_query_name(q)
+    q_core = _strip_etf_suffix(q)
 
     scored: list[tuple[int, dict[str, str]]] = []
     for item in stocks:
         code, name = item["code"], item["name"]
+        name_norm = _normalize_query_name(name)
         score = -1
         if q_digits and code == q_digits.zfill(6):
             score = 100
         elif q_digits and code.startswith(q_digits):
             score = 80 - len(code)
+        elif q_norm and len(q_norm) >= 2 and q_norm in name_norm:
+            score = 70 + min(len(q_norm), 15)
         elif q_lower in name.lower():
             score = 60
+        elif q_core and len(q_core) >= 2 and _subsequence_match(q_core, name_norm):
+            score = 52 + min(len(q_core), 12)
         elif q_lower in code:
             score = 50
         if score >= 0:

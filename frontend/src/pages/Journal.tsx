@@ -777,7 +777,9 @@ export default function Journal() {
 
   const copyTodayToRehearsal = () => {
     if (!data) return;
-    const base = (data.today_positions ?? [])
+    const all = data.today_positions ?? [];
+    const skipped = all.filter(p => !p.code && (p.qty ?? 0) > 0);
+    const base = all
       .filter(p => p.code && (p.qty ?? 0) > 0)
       .map(p => ({
         code: p.code!,
@@ -787,7 +789,11 @@ export default function Journal() {
         note: '',
       }));
     setRehearsal(base);
-    toast('已从今日持仓复制，可调整数量（0=清仓）或添加新开仓');
+    if (skipped.length > 0) {
+      toast(`有 ${skipped.length} 条持仓缺少代码未复制，请先在资金账本编辑补全`);
+    } else {
+      toast('已从今日持仓复制，可调整数量（0=清仓）或添加新开仓');
+    }
   };
 
   const pickRehearsalStock = async (i: number, code: string, name: string) => {
