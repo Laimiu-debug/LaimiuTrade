@@ -268,7 +268,7 @@ async function fetchCloseOnDay(code: string, day: string): Promise<number | null
 }
 
 function PrintTextBlock({ label, text }: { label: string; text: string }) {
-  if (!text.trim()) return null;
+  if (!text?.trim()) return null;
   return (
     <div className="print-text-block">
       <div className="print-text-label">{label}</div>
@@ -428,8 +428,20 @@ export default function Journal() {
     return api.get<DailyReview>(`/api/reviews/daily/${d}`).then(res => {
       if (seq !== loadSeqRef.current) return;
       if (res.review_date !== d) return;
-      const normalized = {
+      const normalized: DailyReview = {
         ...res,
+        market_observation: res.market_observation ?? '',
+        decision_review: res.decision_review ?? '',
+        mistakes: res.mistakes ?? '',
+        ai_summary: res.ai_summary ?? '',
+        next_market_forecast: res.next_market_forecast ?? '',
+        next_position_plan: res.next_position_plan ?? '',
+        next_risk_plan: res.next_risk_plan ?? '',
+        images: res.images ?? [],
+        scores: res.scores ?? {},
+        trade_scores: res.trade_scores ?? {},
+        trades: res.trades ?? [],
+        next_watchlist: res.next_watchlist ?? [],
         t_groups: res.t_groups ?? [],
         next_position_rehearsal: res.next_position_rehearsal ?? [],
         today_positions: res.today_positions ?? [],

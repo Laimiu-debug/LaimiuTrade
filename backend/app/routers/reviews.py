@@ -470,20 +470,24 @@ def _compare_rehearsal(planned: list, actual: list) -> list[dict]:
     return rows
 
 
+def _daily_text(value: str | None) -> str:
+    return value if isinstance(value, str) else ""
+
+
 def _daily_dict(r: DailyReview) -> dict:
     return {
         "review_date": r.review_date.isoformat(),
-        "market_observation": r.market_observation,
-        "decision_review": r.decision_review,
-        "mistakes": r.mistakes,
+        "market_observation": _daily_text(r.market_observation),
+        "decision_review": _daily_text(r.decision_review),
+        "mistakes": _daily_text(r.mistakes),
         "images": json.loads(r.images or "[]"),
         "scores": json.loads(r.scores or "{}"),
         "trade_scores": json.loads(getattr(r, "trade_scores", None) or "{}"),
-        "ai_summary": r.ai_summary,
-        "next_market_forecast": r.next_market_forecast,
+        "ai_summary": _daily_text(r.ai_summary),
+        "next_market_forecast": _daily_text(r.next_market_forecast),
         "next_watchlist": json.loads(r.next_watchlist or "[]"),
-        "next_position_plan": r.next_position_plan,
-        "next_risk_plan": r.next_risk_plan,
+        "next_position_plan": _daily_text(r.next_position_plan),
+        "next_risk_plan": _daily_text(r.next_risk_plan),
         "next_position_rehearsal": json.loads(getattr(r, "next_position_rehearsal", None) or "[]"),
     }
 
