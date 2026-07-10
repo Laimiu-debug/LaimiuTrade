@@ -97,7 +97,45 @@ def delete_trade(trade_id: int, db: Session = Depends(get_db)):
 @router.get("/rounds")
 def rounds(db: Session = Depends(get_db)):
     result = rounds_svc.build_rounds(db)
-    return {"rounds": result, "stats": rounds_svc.round_stats(result)}
+    enriched = []
+    for r in result:
+        excerpt, review_dates = rounds_svc.round_review_meta(db, r)
+        enriched.append({
+            **r,
+            "review_snippet": excerpt,
+            "review_summary": rounds_svc.get_round_summary(db, r["code"], r["start_date"]),
+            "review_dates": review_dates,
+            "trade_count": len(r.get("trades") or []),
+        })
+    return {"rounds": enriched, "stats": rounds_svc.round_stats(result)}
+
+
+class RoundSummaryIn(BaseModel):
+    review_summary: str = ""
+
+
+@router.put("/rounds/{code}/{start_date}/summary")
+def save_round_summary(code: str, start_date: date, body: RoundSummaryIn, db: Session = Depends(get_db)):
+    if rounds_svc.find_round(db, code, start_date.isoformat()) is None:
+        raise HTTPException(404, "回合不存在")
+    text = rounds_svc.set_round_summary(db, code, start_date.isoformat(), body.review_summary)
+    return {"review_summary": text}
+
+
+@router.post("/rounds/{code}/{start_date}/ai-review")
+def ai_round_review(code: str, start_date: date, db: Session = Depends(get_db)):
+    if rounds_svc.find_round(db, code, start_date.isoformat()) is None:
+        raise HTTPException(404, "回合不存在")
+    try:
+        result = ai_svc.generate_round_review(db, code, start_date.isoformat())
+    except ai_svc.AIUnavailable as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    summary = str(result.get("review_summary") or "").strip()
+    if summary:
+        rounds_svc.set_round_summary(db, code, start_date.isoformat(), summary)
+    return {"review_summary": summary}
 
 
 # ---------- 截图导入 ----------

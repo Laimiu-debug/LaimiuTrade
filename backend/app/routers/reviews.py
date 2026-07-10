@@ -876,6 +876,7 @@ def _round_review_meta(db: Session, r: dict) -> tuple[str, list[str]]:
 
 def _round_payload(db: Session, r: dict, *, day: date | None = None) -> dict:
     excerpt, review_dates = _round_review_meta(db, r)
+    stored_summary = rounds_svc.get_round_summary(db, r["code"], r["start_date"])
     payload = {
         "code": r["code"],
         "name": r["name"],
@@ -890,6 +891,7 @@ def _round_payload(db: Session, r: dict, *, day: date | None = None) -> dict:
         "fees": r.get("fees"),
         "trade_count": len(r.get("trades") or []),
         "review_snippet": excerpt,
+        "review_summary": stored_summary,
         "review_dates": review_dates,
     }
     if day is not None:
@@ -1005,10 +1007,11 @@ def _build_period_context(db: Session, start: date, end: date) -> dict:
         r for r in all_rounds
         if r["status"] == "closed" and r["end_date"] and start.isoformat() <= r["end_date"] <= end.isoformat()
     ]
-    round_lines = [
-        rounds_svc.round_line_summary(r, _round_review_meta(db, r)[0])
-        for r in closed_in
-    ]
+    round_lines = []
+    for r in closed_in:
+        stored = rounds_svc.get_round_summary(db, r["code"], r["start_date"])
+        excerpt = stored or _round_review_meta(db, r)[0]
+        round_lines.append(rounds_svc.round_line_summary(r, excerpt))
 
     codes = sorted({t.code for t in trades})
     market_text = market_svc.market_context_text(db, ["000001.SH", "399001.SZ", *codes[:5]], end)

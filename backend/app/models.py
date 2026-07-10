@@ -140,3 +140,16 @@ class Setting(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
+
+
+class RoundReview(Base):
+    """回合级复盘摘要（用户编辑或 AI 生成）。"""
+
+    __tablename__ = "round_reviews"
+    __table_args__ = (UniqueConstraint("code", "start_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(16), index=True)
+    start_date: Mapped[date] = mapped_column(Date)
+    review_summary: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, fmtMoney, fmtPct, today, type RoundRow, type RoundStats, type TradeRow } from '../api';
+import { api, fmtMoney, today, type LinkedRoundRow, type RoundRow, type RoundStats, type TradeRow } from '../api';
 import { Empty, SideTag, Stat, useToast, DateInput, NumberInput, StockPicker, Select } from '../components';
+import { PeriodRounds } from './periodicShared';
 
 const SIDE_OPTIONS = [
   { value: 'buy', label: '买入' },
@@ -156,6 +157,31 @@ export default function Trades() {
   const [form, setForm] = useState({
     trade_date: today(), code: '', name: '', side: 'buy', price: '', qty: '', note: '',
   });
+
+  const reloadRounds = useCallback(() => {
+    api.get<{ rounds: RoundRow[]; stats: RoundStats }>('/api/trades/rounds').then(setRounds).catch(e => toast(String(e)));
+  }, [toast]);
+
+  const linkedRounds = useMemo<LinkedRoundRow[]>(() => {
+    if (!rounds) return [];
+    return rounds.rounds.map(r => ({
+      code: r.code,
+      name: r.name,
+      start_date: r.start_date,
+      end_date: r.end_date,
+      status: r.status,
+      position: r.position,
+      pnl: r.pnl,
+      pnl_pct: r.pnl_pct,
+      buy_amount: r.buy_amount,
+      sell_amount: r.sell_amount,
+      fees: r.fees,
+      trade_count: r.trade_count ?? r.trades.length,
+      review_snippet: r.review_snippet ?? '',
+      review_summary: r.review_summary ?? '',
+      review_dates: r.review_dates ?? [],
+    }));
+  }, [rounds]);
 
   const reload = useCallback(() => {
     api.get<TradeRow[]>('/api/trades').then(setTrades).catch(e => toast(String(e)));
@@ -552,27 +578,7 @@ export default function Trades() {
           )}
           <div className="card">
             {rounds.rounds.length === 0 ? <Empty text="暂无回合" /> : (
-              <table>
-                <thead><tr><th>标的</th><th>周期</th><th>状态</th><th style={{ textAlign: 'right' }}>买入额</th><th style={{ textAlign: 'right' }}>盈亏</th><th style={{ textAlign: 'right' }}>收益率</th></tr></thead>
-                <tbody>
-                  {rounds.rounds.map((r, i) => (
-                    <tr key={i}>
-                      <td>{r.name} <span className="muted mono">{r.code}</span></td>
-                      <td className="muted">
-                        <Link to={`/journal?day=${r.start_date}`}>{r.start_date}</Link>
-                        {' → '}
-                        {r.end_date
-                          ? <Link to={`/journal?day=${r.end_date}`}>{r.end_date}</Link>
-                          : '持仓中'}
-                      </td>
-                      <td>{r.status === 'closed' ? <span className="tag">已清仓</span> : r.status === 'open' ? <span className="tag gold">持仓 {r.position}股</span> : <span className="tag sell">异常</span>}</td>
-                      <td style={{ textAlign: 'right' }} className="mono">¥{fmtMoney(r.buy_amount)}</td>
-                      <td style={{ textAlign: 'right' }} className={`mono ${r.pnl != null ? (r.pnl >= 0 ? 'pos' : 'neg') : ''}`}>{r.pnl != null ? `¥${fmtMoney(r.pnl)}` : '—'}</td>
-                      <td style={{ textAlign: 'right' }} className={`mono ${r.pnl_pct != null ? (r.pnl_pct >= 0 ? 'pos' : 'neg') : ''}`}>{fmtPct(r.pnl_pct)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <PeriodRounds rounds={linkedRounds} title="全部回合" onRoundsChange={reloadRounds} />
             )}
           </div>
         </>

@@ -4,7 +4,7 @@ from datetime import date
 
 from sqlalchemy.orm import Session
 
-from ..models import DailyReview, Trade
+from ..models import DailyReview, RoundReview, Trade
 
 
 def _trade_dict(t: Trade) -> dict:
@@ -194,3 +194,36 @@ def round_review_meta(db: Session, r: dict) -> tuple[str, list[str]]:
         elif (row.market_observation or "").strip():
             parts.append(f"{row.review_date} 观察:{row.market_observation.strip()[:80]}")
     return " | ".join(parts[:2]), review_dates
+
+
+def find_round(db: Session, code: str, start_date: str) -> dict | None:
+    for r in build_rounds(db):
+        if r["code"] == code and r["start_date"] == start_date:
+            return r
+    return None
+
+
+def get_round_summary(db: Session, code: str, start_date: str) -> str:
+    row = (
+        db.query(RoundReview)
+        .filter(RoundReview.code == code, RoundReview.start_date == date.fromisoformat(start_date))
+        .first()
+    )
+    return (row.review_summary or "").strip() if row else ""
+
+
+def set_round_summary(db: Session, code: str, start_date: str, summary: str) -> str:
+    start = date.fromisoformat(start_date)
+    row = (
+        db.query(RoundReview)
+        .filter(RoundReview.code == code, RoundReview.start_date == start)
+        .first()
+    )
+    text = (summary or "").strip()
+    if row is None:
+        row = RoundReview(code=code, start_date=start, review_summary=text)
+        db.add(row)
+    else:
+        row.review_summary = text
+    db.commit()
+    return text

@@ -468,6 +468,69 @@ def generate_rehearsal_analysis(
     return _chat(db, [{"role": "user", "content": prompt}]).strip()
 
 
+def generate_round_review(db: Session, code: str, start_date: str) -> dict:
+    """针对单个回合生成复盘摘要。"""
+    r = rounds_svc.find_round(db, code, start_date)
+    if r is None:
+        raise ValueError("回合不存在")
+
+    trades = r.get("trades") or []
+    trade_lines = [
+        f"{t['date']} {'买' if t['side'] == 'buy' else '卖'} {t['name'] or code} "
+        f"{t['price']}×{t['qty']} 费用{t.get('fees', 0)}"
+        for t in trades
+    ]
+    excerpt, review_dates = rounds_svc.round_review_meta(db, r)
+    daily_parts: list[str] = []
+    if excerpt:
+        daily_parts.append(excerpt)
+    if review_dates:
+        daily_parts.append(f"有复盘日期: {', '.join(review_dates)}")
+
+    end_day = date.fromisoformat(r["end_date"]) if r.get("end_date") else date.fromisoformat(r["start_date"])
+    market_text = market_svc.market_context_text(db, [code], end_day)
+
+    span = f"{r['start_date']} → {r['end_date'] or '持仓中'}"
+    if r["status"] == "closed" and r.get("pnl") is not None:
+        pnl_line = f"盈亏 {r['pnl']} 元 ({r.get('pnl_pct')}%)"
+    elif r["status"] == "anomaly":
+        pnl_line = "数据异常回合"
+    else:
+        pnl_line = "持仓中"
+
+    existing = rounds_svc.get_round_summary(db, code, start_date)
+
+    prompt = f"""你是一位 A 股波段交易教练。请为下面这一完整交易回合撰写**回合复盘摘要**（中文，3-6句，具体、可执行，避免空话）。
+
+## 回合
+标的：{r['name']} ({code})
+周期：{span}
+状态：{r['status']}
+结果：{pnl_line}
+成交笔数：{len(trades)}
+
+## 回合内交易流水
+{chr(10).join(trade_lines) or '（无明细）'}
+
+## 行情背景（清仓日/最近交易日）
+{market_text}
+
+## 回合跨度内的每日复盘摘录
+{chr(10).join(daily_parts) or '（暂无日复盘摘录）'}
+
+## 已有回合摘要（可吸收改进，勿重复啰嗦）
+{existing or '（未填写）'}
+
+## 输出要求
+严格输出 JSON：
+{{
+  "review_summary": "3-6句：买卖时机评价、纪律与情绪、本回合核心教训或可复制优点；已清仓须点评盈亏原因，持仓中须点评当前应对"
+}}"""
+
+    content = _chat(db, [{"role": "user", "content": prompt}])
+    return _extract_json(content)
+
+
 def generate_weekly_review(
     db: Session,
     year: int,

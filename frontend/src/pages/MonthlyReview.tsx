@@ -154,7 +154,7 @@ export default function MonthlyReview() {
             </div>
             {monthly.period_rounds.length > 0 && (
               <div className="card no-print" style={{ marginBottom: 16 }}>
-                <PeriodRounds rounds={monthly.period_rounds} title="本月清仓回合" />
+                <PeriodRounds rounds={monthly.period_rounds} title="本月清仓回合" onRoundsChange={loadMonthly} />
               </div>
             )}
             <div className="periodic-grid periodic-grid-2 no-print">

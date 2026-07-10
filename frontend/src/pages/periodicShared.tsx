@@ -1,6 +1,18 @@
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { fmtMoney, fmtPct } from '../api';
 import type { LinkedRoundRow } from '../api';
+import { aiRoundReview, roundDisplaySummary, roundKey, saveRoundSummary } from '../roundReview';
+import { useToast } from '../components';
+import { useAiBusy } from '../AiBusy';
+import {
+  PrintDocument,
+  PrintDocHeader,
+  PrintSection,
+  PrintStatCard,
+  PrintStatGrid,
+  PrintTextBlock,
+} from '../printLayout';
 
 export interface PeriodAuto {
   start: string;
@@ -59,11 +71,58 @@ export function PeriodRounds({
   rounds,
   title = '清仓回合',
   compact = false,
+  onRoundsChange,
 }: {
   rounds: LinkedRoundRow[];
   title?: string;
   compact?: boolean;
+  onRoundsChange?: () => void;
 }) {
+  const toast = useToast();
+  const { setBusy } = useAiBusy();
+  const [summaries, setSummaries] = useState<Record<string, string>>({});
+  const [analyzingKey, setAnalyzingKey] = useState<string | null>(null);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    const next: Record<string, string> = {};
+    for (const r of rounds) {
+      next[roundKey(r.code, r.start_date)] = r.review_summary ?? '';
+    }
+    setSummaries(next);
+  }, [rounds]);
+
+  const persistSummary = useCallback(async (r: LinkedRoundRow, value: string) => {
+    const key = roundKey(r.code, r.start_date);
+    if ((r.review_summary ?? '') === value.trim()) return;
+    setSavingKey(key);
+    try {
+      await saveRoundSummary(r.code, r.start_date, value);
+      onRoundsChange?.();
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setSavingKey(null);
+    }
+  }, [onRoundsChange, toast]);
+
+  const runAiReview = useCallback(async (r: LinkedRoundRow) => {
+    const key = roundKey(r.code, r.start_date);
+    setAnalyzingKey(key);
+    setBusy(true, `AI 分析 ${r.name || r.code} 回合…`);
+    try {
+      const summary = await aiRoundReview(r.code, r.start_date);
+      setSummaries(prev => ({ ...prev, [key]: summary }));
+      toast('回合 AI 摘要已生成');
+      onRoundsChange?.();
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setAnalyzingKey(null);
+      setBusy(false);
+    }
+  }, [onRoundsChange, setBusy, toast]);
+
   if (!rounds.length) return null;
   const closed = rounds.filter(r => r.status === 'closed');
   const wins = closed.filter(r => (r.pnl ?? 0) > 0);
@@ -88,12 +147,19 @@ export function PeriodRounds({
             <th>周期</th>
             <th style={{ textAlign: 'right' }}>盈亏</th>
             <th style={{ textAlign: 'right' }}>收益率</th>
-            {!compact && <th>复盘摘录</th>}
+            {!compact && <th>回合复盘摘要</th>}
+            {!compact && <th style={{ width: 92 }}>操作</th>}
           </tr>
         </thead>
         <tbody>
-          {rounds.map(r => (
-            <tr key={`${r.code}-${r.start_date}`}>
+          {rounds.map(r => {
+            const key = roundKey(r.code, r.start_date);
+            const summaryVal = summaries[key] ?? '';
+            const placeholder = r.review_snippet || '填写本回合复盘摘要，或点 AI 分析生成';
+            const analyzing = analyzingKey === key;
+            const saving = savingKey === key;
+            return (
+            <tr key={key}>
               <td>
                 {r.name} <span className="muted mono">{r.code}</span>
                 {r.closed_today && <span className="tag gold" style={{ marginLeft: 6, fontSize: 10 }}>今日清仓</span>}
@@ -112,47 +178,78 @@ export function PeriodRounds({
                 {fmtPct(r.pnl_pct)}
               </td>
               {!compact && (
-                <td className="muted" style={{ fontSize: 12, maxWidth: 280 }}>
-                  {r.review_snippet || (
-                    r.review_dates.length > 0
-                      ? r.review_dates.map((d, i) => (
-                          <span key={d}>
-                            {i > 0 && '、'}
-                            <Link to={`/journal?day=${d}`}>{d}</Link>
-                          </span>
-                        ))
-                      : '—'
+                <td>
+                  <textarea
+                    className="period-round-summary-input"
+                    value={summaryVal}
+                    placeholder={placeholder}
+                    rows={3}
+                    onChange={e => setSummaries(prev => ({ ...prev, [key]: e.target.value }))}
+                    onBlur={e => void persistSummary(r, e.target.value)}
+                  />
+                  {!summaryVal.trim() && r.review_snippet && (
+                    <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                      日复盘摘录：{r.review_snippet}
+                    </div>
                   )}
                 </td>
               )}
+              {!compact && (
+                <td>
+                  <button
+                    className="ghost"
+                    style={{ fontSize: 12, whiteSpace: 'nowrap' }}
+                    disabled={analyzing || analyzingKey !== null}
+                    onClick={() => void runAiReview(r)}
+                  >
+                    {analyzing ? '分析中…' : saving ? '保存中…' : '✦ AI 分析'}
+                  </button>
+                </td>
+              )}
             </tr>
-          ))}
+          )})}
         </tbody>
       </table>
     </div>
   );
 }
 
-export function PeriodRoundsPrint({ rounds, title = '清仓回合' }: { rounds: LinkedRoundRow[]; title?: string }) {
+export function PeriodRoundsPrint({ rounds }: { rounds: LinkedRoundRow[]; title?: string }) {
   if (!rounds.length) return null;
+  const closed = rounds.filter(r => r.status === 'closed');
+  const wins = closed.filter(r => (r.pnl ?? 0) > 0);
+  const losses = closed.filter(r => (r.pnl ?? 0) <= 0);
+  const totalPnl = closed.reduce((s, r) => s + (r.pnl ?? 0), 0);
+  const summary = closed.length > 0
+    ? `${wins.length} 盈 · ${losses.length} 亏 · 合计 ¥${fmtMoney(totalPnl)}`
+    : `${rounds.length} 笔`;
   return (
-    <div className="print-text-block">
-      <div className="print-text-label">{title}</div>
-      <table className="print-table">
-        <thead>
-          <tr><th>标的</th><th>周期</th><th>盈亏</th><th>收益率</th></tr>
-        </thead>
-        <tbody>
-          {rounds.map(r => (
-            <tr key={`${r.code}-${r.start_date}`}>
-              <td>{r.name} ({r.code})</td>
-              <td>{r.start_date} → {r.end_date ?? '持仓中'}</td>
-              <td>{r.pnl != null ? `¥${fmtMoney(r.pnl)}` : '—'}</td>
-              <td>{fmtPct(r.pnl_pct)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="print-rounds-block">
+      <div className="print-rounds-summary">{summary}</div>
+      <div className="print-rounds-list">
+        {rounds.map(r => {
+          const text = roundDisplaySummary(r.review_summary, r.review_snippet);
+          const sideCls = r.pnl != null ? (r.pnl >= 0 ? 'pos' : 'neg') : '';
+          return (
+            <div className="print-round-card" key={`${r.code}-${r.start_date}`}>
+              <div className="print-round-card-head">
+                <div className="print-round-card-name">{r.name}</div>
+                <div className="print-round-card-meta mono">
+                  {r.code} · {r.start_date} → {r.end_date ?? '持仓中'}
+                </div>
+                <div className={`print-round-card-pnl mono ${sideCls}`}>
+                  {r.pnl != null ? `¥${fmtMoney(r.pnl)} · ${fmtPct(r.pnl_pct)}` : '持仓中'}
+                </div>
+              </div>
+              {text ? (
+                <div className="print-round-snippet">{text}</div>
+              ) : (
+                <div className="print-round-snippet is-empty">（未填写回合复盘摘要）</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -181,52 +278,24 @@ export function PeriodicField({
   );
 }
 
-export function PrintTextBlock({ label, text }: { label: string; text: string }) {
-  if (!text?.trim()) return null;
-  return (
-    <div className="print-text-block">
-      <div className="print-text-label">{label}</div>
-      <div className="print-text-body">{text}</div>
-    </div>
-  );
-}
-
 export function AutoStatsPrint({ auto }: { auto: PeriodAuto }) {
+  const winNote = auto.closed_rounds > 0 ? `盈 ${auto.win_rounds} / ${auto.closed_rounds}` : '';
   return (
-    <div className="stat-row">
-      <div className="stat-item">
-        <div className="stat-label">区间收益</div>
-        <div className={`stat-value${auto.return_pct >= 0 ? ' pos' : ' neg'}`}>{fmtPct(auto.return_pct)}</div>
-      </div>
-      <div className="stat-item">
-        <div className="stat-label">区间最大回撤</div>
-        <div className="stat-value">{fmtPct(auto.max_drawdown_pct, false)}</div>
-      </div>
-      <div className="stat-item">
-        <div className="stat-label">期末净值</div>
-        <div className="stat-value">{auto.end_nav.toFixed(4)}</div>
-      </div>
-      <div className="stat-item">
-        <div className="stat-label">交易 / 清仓回合</div>
-        <div className="stat-value">{auto.trade_count} / {auto.closed_rounds}</div>
-      </div>
-      <div className="stat-item">
-        <div className="stat-label">回合盈亏</div>
-        <div className={`stat-value${auto.round_pnl >= 0 ? ' pos' : ' neg'}`}>¥{fmtMoney(auto.round_pnl)}</div>
-      </div>
-    </div>
+    <PrintStatGrid>
+      <PrintStatCard label="区间收益" tone={auto.return_pct >= 0 ? 'pos' : 'neg'} value={fmtPct(auto.return_pct)} />
+      <PrintStatCard label="区间最大回撤" value={fmtPct(auto.max_drawdown_pct, false)} />
+      <PrintStatCard label="期末净值" value={auto.end_nav.toFixed(4)} />
+      <PrintStatCard
+        label="交易 / 清仓回合"
+        value={`${auto.trade_count} / ${auto.closed_rounds}`}
+        note={winNote}
+      />
+      <PrintStatCard label="回合盈亏" tone={auto.round_pnl >= 0 ? 'pos' : 'neg'} value={`¥${fmtMoney(auto.round_pnl)}`} />
+    </PrintStatGrid>
   );
 }
 
-export function PrintDocHeader({ username, title, subtitle }: { username: string; title: string; subtitle: string }) {
-  const meta = username.trim() ? `${username.trim()} · ${subtitle}` : subtitle;
-  return (
-    <div className="print-doc-header">
-      <h1>{title}</h1>
-      <div className="print-doc-meta">{meta}</div>
-    </div>
-  );
-}
+export { PrintDocHeader, PrintTextBlock } from '../printLayout';
 
 export function WeeklyPrintBody({
   username, year, week, periodLabel, auto,
@@ -245,15 +314,27 @@ export function WeeklyPrintBody({
   period_rounds?: LinkedRoundRow[];
 }) {
   return (
-    <>
-      <PrintDocHeader username={username} title="Trading MS 周复盘" subtitle={`${year} 第 ${week} 周 · ${periodLabel}`} />
-      <AutoStatsPrint auto={auto} />
-      <PeriodRoundsPrint rounds={period_rounds} title="本周清仓回合" />
-      <PrintTextBlock label="本周盘面回顾" text={market_review} />
-      <PrintTextBlock label="本周做对的事" text={right_things} />
-      <PrintTextBlock label="本周做错的事" text={wrong_things} />
-      <PrintTextBlock label="下周策略" text={next_strategy} />
-    </>
+    <PrintDocument>
+      <PrintDocHeader
+        username={username}
+        title="周复盘"
+        subtitle={`${year} 第 ${week} 周 · ${periodLabel}`}
+      />
+      <PrintSection title="区间统计">
+        <AutoStatsPrint auto={auto} />
+      </PrintSection>
+      {period_rounds.length > 0 && (
+        <PrintSection title="本周清仓回合">
+          <PeriodRoundsPrint rounds={period_rounds} />
+        </PrintSection>
+      )}
+      <PrintSection title="复盘正文">
+        <PrintTextBlock label="本周盘面回顾" text={market_review} />
+        <PrintTextBlock label="本周做对的事" text={right_things} />
+        <PrintTextBlock label="本周做错的事" text={wrong_things} />
+        <PrintTextBlock label="下周策略" text={next_strategy} />
+      </PrintSection>
+    </PrintDocument>
   );
 }
 
@@ -272,15 +353,30 @@ export function MonthlyPrintBody({
   period_rounds?: LinkedRoundRow[];
 }) {
   return (
-    <>
-      <PrintDocHeader username={username} title="Trading MS 月复盘" subtitle={`${year} 年 ${month} 月 · ${periodLabel}`} />
-      <AutoStatsPrint auto={auto} />
-      <PeriodRoundsPrint rounds={period_rounds} title="本月清仓回合" />
-      <div className="print-text-body" style={{ marginBottom: 12 }}>
-        节点进度：已点亮 {node_state.lit_count} / {node_state.node_count} · 当前净值 {node_state.nav.toFixed(4)}
-      </div>
-      <PrintTextBlock label="体系迭代" text={system_iteration} />
-      <PrintTextBlock label="下月目标" text={next_goal} />
-    </>
+    <PrintDocument>
+      <PrintDocHeader
+        username={username}
+        title="月复盘"
+        subtitle={`${year} 年 ${month} 月 · ${periodLabel}`}
+      />
+      <PrintSection title="区间统计">
+        <AutoStatsPrint auto={auto} />
+      </PrintSection>
+      {period_rounds.length > 0 && (
+        <PrintSection title="本月清仓回合">
+          <PeriodRoundsPrint rounds={period_rounds} />
+        </PrintSection>
+      )}
+      <PrintSection title="节点征途">
+        <div className="print-node-banner">
+          <span>已点亮 <strong>{node_state.lit_count}</strong> / {node_state.node_count} 节点</span>
+          <span>当前净值 <strong className="mono">{node_state.nav.toFixed(4)}</strong></span>
+        </div>
+      </PrintSection>
+      <PrintSection title="体系与目标">
+        <PrintTextBlock label="体系迭代" text={system_iteration} />
+        <PrintTextBlock label="下月目标" text={next_goal} />
+      </PrintSection>
+    </PrintDocument>
   );
 }

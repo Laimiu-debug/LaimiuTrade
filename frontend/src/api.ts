@@ -83,6 +83,10 @@ export interface RoundRow {
   pnl: number | null;
   pnl_pct: number | null;
   trades: { id: number; date: string; side: string; price: number; qty: number; fees: number }[];
+  review_snippet?: string;
+  review_summary?: string;
+  review_dates?: string[];
+  trade_count?: number;
 }
 
 /** 回合与复盘串联摘要（日/周/月 API 返回） */
@@ -100,6 +104,7 @@ export interface LinkedRoundRow {
   fees?: number;
   trade_count: number;
   review_snippet: string;
+  review_summary?: string;
   review_dates: string[];
   has_trade_today?: boolean;
   closed_today?: boolean;

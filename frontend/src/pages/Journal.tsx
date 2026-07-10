@@ -8,7 +8,17 @@ import {
 import { Empty, NumberInput, SideTag, useToast, DateInput, StockPicker } from '../components';
 import { printDailyReview } from '../printPage';
 import { fmtCnDate } from '../printCss';
-import { PrintDocHeader, PeriodRounds } from './periodicShared';
+import {
+  PrintDocument,
+  PrintDocHeader,
+  PrintScoreDimRows,
+  PrintSection,
+  PrintSummaryBox,
+  PrintTextBlock,
+  PrintTradeSide,
+} from '../printLayout';
+import { PrintMarkdownBody } from '../printMarkdown';
+import { PeriodRounds } from './periodicShared';
 import { useAiBusy } from '../AiBusy';
 import { confirmDiscard, useAutosave, useDirtyGuard } from '../hooks/usePersist';
 
@@ -318,47 +328,77 @@ async function fetchCloseOnDay(code: string, day: string): Promise<number | null
   }
 }
 
-function PrintTextBlock({ label, text }: { label: string; text: string }) {
-  if (!text?.trim()) return null;
-  return (
-    <div className="print-text-block">
-      <div className="print-text-label">{label}</div>
-      <div className="print-text-body">{text}</div>
-    </div>
-  );
-}
-
 function JournalPrintReport({ data, day, username }: { data: DailyReview; day: string; username: string }) {
   const tGroups = data.t_groups ?? [];
+  const tradeCount = data.trades.length;
+  const assets = data.snapshot?.total_assets;
+
   return (
-    <div className="journal-print-report">
+    <PrintDocument>
       <PrintDocHeader
         username={username}
-        title="Trading MS 复盘日志"
+        title="每日复盘"
         subtitle={`${fmtCnDate(day)} · ${day}`}
+        badge={tradeCount > 0 ? `${tradeCount} 笔交易` : undefined}
       />
-      <div className="print-section">
-        <h4>当日交易与 AI 分析</h4>
+
+      {assets != null && (
+        <PrintSection title="收盘概览">
+          <div className="print-daily-hero">
+            <div className="print-daily-hero-item">
+              <span className="print-daily-hero-label">总资产</span>
+              <span className="print-daily-hero-value">¥{fmtMoney(assets)}</span>
+            </div>
+            {data.snapshot?.positions?.length ? (
+              <div className="print-daily-hero-item">
+                <span className="print-daily-hero-label">持仓数</span>
+                <span className="print-daily-hero-value">{data.snapshot.positions.length}</span>
+              </div>
+            ) : null}
+          </div>
+          {(data.snapshot?.positions?.length ?? 0) > 0 && (
+            <table className="print-table print-table-elegant">
+              <thead><tr><th>代码</th><th>名称</th><th className="num">数量</th></tr></thead>
+              <tbody>
+                {data.snapshot!.positions.map((p, i) => (
+                  <tr key={i}>
+                    <td className="mono">{p.code}</td>
+                    <td>{p.name}</td>
+                    <td className="num mono">{p.qty}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </PrintSection>
+      )}
+
+      <PrintSection title="当日交易与 AI 分析">
         {data.trades.length === 0 ? (
-          <p className="muted">当日无交易</p>
+          <p className="print-muted">当日无交易</p>
         ) : data.trades.map(t => {
           const ts = data.trade_scores?.[String(t.id)] ?? {};
           const summary = tradeSummary(ts);
           const avg = tradeAvgScore(ts);
           const tGroup = tGroups.find(g => g.trade_ids.includes(t.id));
           return (
-            <div className="print-trade-block" key={t.id}>
-              <div className="print-trade-head">
-                <strong>{t.side === 'buy' ? '买入' : '卖出'} {t.name || t.code}</strong>
-                <span className="mono muted"> {day} · {t.code} · {t.price}×{t.qty}</span>
-                {tGroup && <span className="tag gold">做T</span>}
-                {avg != null && <span className="tag gold">均分 {avg}</span>}
+            <div className="print-trade-card" key={t.id}>
+              <div className="print-trade-card-head">
+                <PrintTradeSide side={t.side} />
+                <div className="print-trade-card-info">
+                  <div className="print-trade-card-name">{t.name || t.code}</div>
+                  <div className="print-trade-card-meta mono">{t.code} · {t.price} × {t.qty}</div>
+                </div>
+                <div className="print-trade-card-tags">
+                  {tGroup && <span className="print-tag">做T</span>}
+                  {avg != null && <span className="print-tag gold">均分 {avg}</span>}
+                </div>
               </div>
-              {summary && <div className="trade-score-summary">{summary}</div>}
+              <PrintSummaryBox label="AI 总评" text={summary ?? ''} />
               {tradeHasAnalysis(ts) ? (
-                <ScoreDimRows scores={ts as Record<string, ScoreEntry | undefined>} side={t.side} />
+                <PrintScoreDimRows scores={ts as Record<string, ScoreEntry | undefined>} side={t.side} />
               ) : (
-                <p className="muted">未分析</p>
+                <p className="print-muted">未分析</p>
               )}
             </div>
           );
@@ -367,105 +407,79 @@ function JournalPrintReport({ data, day, username }: { data: DailyReview; day: s
           const gs = data.trade_scores?.[groupScoreKey(g.code)] ?? {};
           if (!tradeHasAnalysis(gs)) return null;
           return (
-            <div className="print-trade-block" key={g.id}>
-              <div className="print-trade-head">
-                <strong>做T · {g.name}</strong>
-                <span className="mono muted"> {g.code}</span>
+            <div className="print-trade-card" key={g.id}>
+              <div className="print-trade-card-head">
+                <span className="print-trade-side t-group">T</span>
+                <div className="print-trade-card-info">
+                  <div className="print-trade-card-name">做T · {g.name}</div>
+                  <div className="print-trade-card-meta mono">{g.code}</div>
+                </div>
               </div>
-              {tradeSummary(gs) && <div className="trade-score-summary">{tradeSummary(gs)}</div>}
-              <ScoreDimRows scores={gs as Record<string, ScoreEntry | undefined>} />
+              <PrintSummaryBox label="组合总评" text={tradeSummary(gs) ?? ''} />
+              <PrintScoreDimRows scores={gs as Record<string, ScoreEntry | undefined>} />
             </div>
           );
         })}
-      </div>
+      </PrintSection>
 
-      <div className="print-section">
-        <h4>整日操作概览</h4>
-        <ScoreDimRows scores={data.scores} />
-        {data.ai_summary && (
-          <div className="journal-day-summary">
-            <div className="journal-day-summary-label">整日 AI 总评</div>
-            {data.ai_summary}
-          </div>
-        )}
-      </div>
+      <PrintSection title="整日操作概览">
+        <PrintScoreDimRows scores={data.scores} />
+        <PrintSummaryBox label="整日 AI 总评" text={data.ai_summary ?? ''} />
+      </PrintSection>
 
-      {data.snapshot && (
-        <div className="print-section">
-          <h4>收盘快照 · ¥{fmtMoney(data.snapshot.total_assets)}</h4>
-          {(data.snapshot.positions?.length ?? 0) > 0 && (
-            <table className="print-table">
-              <thead><tr><th>代码</th><th>名称</th><th>数量</th></tr></thead>
-              <tbody>
-                {data.snapshot.positions.map((p, i) => (
-                  <tr key={i}><td className="mono">{p.code}</td><td>{p.name}</td><td className="mono">{p.qty}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-
-      <div className="print-section">
-        <h4>复盘正文</h4>
-        <PrintTextBlock label="盘面观察" text={data.market_observation} />
-        <PrintTextBlock label="决策复盘" text={data.decision_review} />
+      <PrintSection title="复盘正文">
+        <PrintTextBlock label="盘面观察 · 大盘 / 板块 / 市场情绪" text={data.market_observation} />
+        <PrintTextBlock label="决策复盘 · 每笔操作的理由与对错" text={data.decision_review} />
         <PrintTextBlock label="错误与教训" text={data.mistakes} />
-      </div>
+      </PrintSection>
 
       {(data.next_position_rehearsal?.length ?? 0) > 0 && (
-        <div className="print-section">
-          <h4>明日操作预演</h4>
-          <table className="print-table">
-            <thead><tr><th>代码</th><th>名称</th><th>预演持仓</th><th>备注</th></tr></thead>
+        <PrintSection title="明日操作预演">
+          <table className="print-table print-table-elegant">
+            <thead><tr><th>代码</th><th>名称</th><th className="num">预演持仓</th><th>备注</th></tr></thead>
             <tbody>
               {data.next_position_rehearsal.map((p, i) => (
                 <tr key={i}>
                   <td className="mono">{p.code}</td>
                   <td>{p.name}</td>
-                  <td className="mono">{p.qty}股{p.qty === 0 ? '（清仓）' : ''}</td>
-                  <td>{p.note ?? ''}</td>
+                  <td className="num mono">{p.qty} 股{p.qty === 0 ? '（清仓）' : ''}</td>
+                  <td>{p.note ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+        </PrintSection>
       )}
 
       {data.rehearsal_ai_analysis?.trim() && (
-        <div className="print-section">
-          <h4>明日预演 AI 分析</h4>
-          <div className="print-text-body">{data.rehearsal_ai_analysis}</div>
-        </div>
+        <PrintSection title="明日预演 AI 分析">
+          <PrintMarkdownBody text={data.rehearsal_ai_analysis} />
+        </PrintSection>
       )}
 
-      <div className="print-section">
-        <h4>次日预研</h4>
+      <PrintSection title="次日预研">
         <PrintTextBlock label="大盘预判" text={data.next_market_forecast} />
         <PrintTextBlock label="仓位计划" text={data.next_position_plan} />
         <PrintTextBlock label="风险预案" text={data.next_risk_plan} />
         {(data.next_watchlist?.length ?? 0) > 0 && (
-          <>
-            <div className="print-text-label" style={{ marginTop: 12 }}>明日观察标的</div>
-            <table className="print-table">
-              <thead>
-                <tr><th>代码</th><th>名称</th><th>触发条件</th><th>计划动作</th></tr>
-              </thead>
-              <tbody>
-                {data.next_watchlist.map((w, i) => (
-                  <tr key={i}>
-                    <td className="mono">{w.code || '—'}</td>
-                    <td>{w.name || '—'}</td>
-                    <td>{w.condition || '—'}</td>
-                    <td>{w.action || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </>
+          <table className="print-table print-table-elegant" style={{ marginTop: 12 }}>
+            <thead>
+              <tr><th>代码</th><th>名称</th><th>触发条件</th><th>计划动作</th></tr>
+            </thead>
+            <tbody>
+              {data.next_watchlist.map((w, i) => (
+                <tr key={i}>
+                  <td className="mono">{w.code || '—'}</td>
+                  <td>{w.name || '—'}</td>
+                  <td>{w.condition || '—'}</td>
+                  <td>{w.action || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
-      </div>
-    </div>
+      </PrintSection>
+    </PrintDocument>
   );
 }
 

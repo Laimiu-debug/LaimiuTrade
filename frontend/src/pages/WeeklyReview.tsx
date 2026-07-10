@@ -165,7 +165,7 @@ export default function WeeklyReview() {
             </div>
             {weekly.period_rounds.length > 0 && (
               <div className="card no-print" style={{ marginBottom: 16 }}>
-                <PeriodRounds rounds={weekly.period_rounds} title="本周清仓回合" />
+                <PeriodRounds rounds={weekly.period_rounds} title="本周清仓回合" onRoundsChange={loadWeekly} />
               </div>
             )}
             <div className="periodic-grid periodic-grid-4 no-print">
