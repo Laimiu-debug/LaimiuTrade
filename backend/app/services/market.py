@@ -28,6 +28,16 @@ def _market_prefix(code: str) -> tuple[str, str]:
     return "sz", code
 
 
+def _tdx_price_scale(code: str) -> float:
+    """通达信 .day 价格缩放：A 股/指数 ÷100，基金/债券 ÷1000（官方 vipdoc 规则）。"""
+    market, pure = _market_prefix(code)
+    if market == "sh" and (pure.startswith("5") or pure.startswith("204")):
+        return 1000.0
+    if market == "sz" and pure.startswith("1"):
+        return 1000.0
+    return 100.0
+
+
 # ---------- 通达信 ----------
 
 def read_tdx_day(vipdoc: str, code: str, limit: int = 120) -> list[dict]:
@@ -35,6 +45,7 @@ def read_tdx_day(vipdoc: str, code: str, limit: int = 120) -> list[dict]:
     path = Path(vipdoc) / market / "lday" / f"{market}{pure}.day"
     if not path.exists():
         raise FileNotFoundError(f"通达信数据文件不存在: {path}")
+    scale = _tdx_price_scale(code)
     records: list[dict] = []
     raw = path.read_bytes()
     count = len(raw) // 32
@@ -44,7 +55,7 @@ def read_tdx_day(vipdoc: str, code: str, limit: int = 120) -> list[dict]:
         d, o, h, low, c, amount, vol, _ = struct.unpack("<IIIIIfII", chunk)
         records.append({
             "date": f"{d // 10000:04d}-{d % 10000 // 100:02d}-{d % 100:02d}",
-            "open": o / 100, "high": h / 100, "low": low / 100, "close": c / 100,
+            "open": o / scale, "high": h / scale, "low": low / scale, "close": c / scale,
             "volume": vol, "amount": amount,
         })
     return records
