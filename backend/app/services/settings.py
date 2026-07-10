@@ -27,6 +27,9 @@ DEFAULTS: dict[str, str] = {
     "ai_api_key": "",
     "ai_text_model": "",
     "ai_vision_model": "",
+    # PDF 导出
+    "pdf_username": "",
+    "pdf_export_dir": "",
 }
 
 

@@ -489,6 +489,7 @@ def _daily_dict(r: DailyReview) -> dict:
         "next_position_plan": _daily_text(r.next_position_plan),
         "next_risk_plan": _daily_text(r.next_risk_plan),
         "next_position_rehearsal": json.loads(getattr(r, "next_position_rehearsal", None) or "[]"),
+        "rehearsal_ai_analysis": _daily_text(getattr(r, "rehearsal_ai_analysis", None)),
     }
 
 
@@ -557,6 +558,7 @@ class DailyIn(BaseModel):
     next_position_plan: str = ""
     next_risk_plan: str = ""
     next_position_rehearsal: list | None = None
+    rehearsal_ai_analysis: str | None = None
 
 
 @router.put("/daily/{day}")
@@ -575,6 +577,8 @@ def save_daily(day: date, body: DailyIn, db: Session = Depends(get_db)):
     row.next_risk_plan = body.next_risk_plan
     if body.next_position_rehearsal is not None:
         row.next_position_rehearsal = json.dumps(body.next_position_rehearsal, ensure_ascii=False)
+    if body.rehearsal_ai_analysis is not None:
+        row.rehearsal_ai_analysis = body.rehearsal_ai_analysis
     db.commit()
     return {"ok": True}
 
@@ -682,6 +686,41 @@ def ai_review(day: date, db: Session = Depends(get_db)):
         "next_position_plan": row.next_position_plan,
         "next_risk_plan": row.next_risk_plan,
     }
+
+
+@router.post("/daily/{day}/ai-rehearsal")
+def ai_rehearsal_review(day: date, db: Session = Depends(get_db)):
+    row = _get_or_create_daily(db, day)
+    rehearsal = json.loads(getattr(row, "next_position_rehearsal", None) or "[]")
+    if not isinstance(rehearsal, list):
+        rehearsal = []
+    watchlist = json.loads(row.next_watchlist or "[]")
+    if not isinstance(watchlist, list):
+        watchlist = []
+    snap = db.query(Snapshot).filter(Snapshot.snap_date == day).first()
+    today_positions = _positions_for_day(db, day)
+    baseline = _rehearsal_baseline(db, day, snap)
+    try:
+        analysis = ai_svc.generate_rehearsal_analysis(
+            db, day, rehearsal, watchlist,
+            {
+                "next_market_forecast": row.next_market_forecast,
+                "next_position_plan": row.next_position_plan,
+                "next_risk_plan": row.next_risk_plan,
+            },
+            today_positions,
+            baseline,
+            row.rehearsal_ai_analysis,
+        )
+    except ai_svc.AIUnavailable as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"AI 预演分析失败: {exc}") from exc
+
+    if isinstance(analysis, str) and analysis.strip():
+        row.rehearsal_ai_analysis = analysis.strip()
+        db.commit()
+    return {"rehearsal_ai_analysis": row.rehearsal_ai_analysis}
 
 
 @router.get("/daily")
@@ -808,6 +847,7 @@ def _build_period_context(db: Session, start: date, end: date) -> dict:
 class WeeklyIn(BaseModel):
     right_things: str = ""
     wrong_things: str = ""
+    market_review: str = ""
     next_strategy: str = ""
 
 
@@ -819,6 +859,7 @@ def get_weekly(year: int, week: int, db: Session = Depends(get_db)):
         "year": year, "week": week,
         "right_things": row.right_things if row else "",
         "wrong_things": row.wrong_things if row else "",
+        "market_review": row.market_review if row else "",
         "next_strategy": row.next_strategy if row else "",
         "auto": _period_auto(db, start, end),
     }
@@ -832,6 +873,7 @@ def save_weekly(year: int, week: int, body: WeeklyIn, db: Session = Depends(get_
         db.add(row)
     row.right_things = body.right_things
     row.wrong_things = body.wrong_things
+    row.market_review = body.market_review
     row.next_strategy = body.next_strategy
     db.commit()
     return {"ok": True}
@@ -851,6 +893,7 @@ def ai_weekly_review(year: int, week: int, db: Session = Depends(get_db)):
         result = ai_svc.generate_weekly_review(db, year, week, start, end, auto, context, {
             "right_things": row.right_things,
             "wrong_things": row.wrong_things,
+            "market_review": row.market_review,
             "next_strategy": row.next_strategy,
         })
     except ai_svc.AIUnavailable as exc:
@@ -858,12 +901,13 @@ def ai_weekly_review(year: int, week: int, db: Session = Depends(get_db)):
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"AI 周复盘失败: {exc}") from exc
 
-    for field in ("right_things", "wrong_things", "next_strategy"):
+    for field in ("market_review", "right_things", "wrong_things", "next_strategy"):
         val = result.get(field)
         if isinstance(val, str) and val.strip():
             setattr(row, field, val.strip())
     db.commit()
     return {
+        "market_review": row.market_review,
         "right_things": row.right_things,
         "wrong_things": row.wrong_things,
         "next_strategy": row.next_strategy,

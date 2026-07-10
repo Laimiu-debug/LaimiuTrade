@@ -130,7 +130,7 @@ def _trade_lines_for(trades: list) -> list[dict]:
             "id": t.id,
             "side": t.side,
             "line": (
-                f"#{t.id} {('买入' if t.side == 'buy' else '卖出')} {t.name or t.code}({t.code}) "
+                f"#{t.id} {t.trade_date} {('买入' if t.side == 'buy' else '卖出')} {t.name or t.code}({t.code}) "
                 f"{t.qty}股 @ {t.price}元，费用 "
                 f"{t.fee_commission + t.fee_stamp + t.fee_transfer:.2f}元"
             ),
@@ -355,7 +355,7 @@ def generate_daily_review(db: Session, review_date: date, review_texts: dict[str
 严格输出 JSON：
 {{
   "market_observation": "大盘/板块/情绪，3-5句",
-  "decision_review": "逐笔或按标的梳理买卖理由与对错，4-8句",
+  "decision_review": "逐笔或按标的梳理买卖理由与对错，每笔须标注操作日期，4-8句",
   "mistakes": "具体错误与改进，2-4句",
   "next_market_forecast": "次日大盘预判，2-3句",
   "next_position_plan": "次日仓位计划，1-2句",
@@ -364,6 +364,75 @@ def generate_daily_review(db: Session, review_date: date, review_texts: dict[str
 
     content = _chat(db, [{"role": "user", "content": prompt}])
     return _extract_json(content)
+
+
+def generate_rehearsal_analysis(
+    db: Session,
+    review_date: date,
+    rehearsal: list,
+    watchlist: list,
+    plans: dict[str, str],
+    today_positions: list,
+    baseline: dict,
+    existing: str = "",
+) -> str:
+    """分析当日填写的次日操作预演与预研计划。"""
+    def fmt_positions(items: list) -> str:
+        if not items:
+            return "（无）"
+        lines = []
+        for p in items:
+            code = p.get("code") or "?"
+            name = p.get("name") or code
+            qty = p.get("qty", 0)
+            note = p.get("note") or ""
+            close = p.get("close")
+            extra = f" @{close}" if close else ""
+            lines.append(f"- {name}({code}) 预演{qty}股{extra}{(' · ' + note) if note else ''}")
+        return "\n".join(lines)
+
+    watch_block = "\n".join(
+        f"- {w.get('name') or w.get('code') or '?'}({w.get('code') or ''}) "
+        f"条件:{w.get('condition') or '—'} 动作:{w.get('action') or '—'}"
+        for w in (watchlist or [])
+    ) or "（无观察标的）"
+
+    today_block = fmt_positions(today_positions)
+    rehearsal_block = fmt_positions(rehearsal)
+    cash = baseline.get("cash", 0)
+    total = baseline.get("total_assets", 0)
+
+    prompt = f"""你是一位 A 股波段交易教练。交易者刚完成 {review_date.isoformat()} 复盘，并填写了**明日操作预演**与**次日预研**。
+请对其预演决策做专业点评：仓位变化是否合理、资金是否够用、逻辑是否自洽、风险是否覆盖。
+
+## 今日收盘基准
+- 可用现金约 {cash} 元，总资产约 {total} 元
+- 今日实际持仓：
+{today_block}
+
+## 明日操作预演（计划收盘持仓）
+{rehearsal_block}
+
+## 次日预研
+- 大盘预判：{plans.get('next_market_forecast') or '（未填写）'}
+- 仓位计划：{plans.get('next_position_plan') or '（未填写）'}
+- 风险预案：{plans.get('next_risk_plan') or '（未填写）'}
+
+## 明日观察标的
+{watch_block}
+
+## 已有分析（可补充完善，避免重复）
+{existing or '（无）'}
+
+## 输出要求
+直接输出中文分析正文（非 JSON），4-8 段，包含：
+1. 预演仓位变化解读（增减仓/新开/清仓的逻辑）
+2. 资金与仓位匹配度（现金是否充裕、是否过度集中）
+3. 预研与预演是否一致（预判、观察标的、预演持仓是否对得上）
+4. 潜在风险与改进建议（具体、可执行）
+语气直接，禁止空话。"""
+
+    return _chat(db, [{"role": "user", "content": prompt}]).strip()
 
 
 def generate_weekly_review(
@@ -402,7 +471,7 @@ def generate_weekly_review(
 ## 本周行情背景
 {context.get('market_text') or '（行情数据不可用）'}
 
-## 本周交易流水
+## 本周交易流水（含操作日期）
 {trade_block}
 
 ## 本周已清仓回合
@@ -412,21 +481,25 @@ def generate_weekly_review(
 {daily_block}
 
 ## 交易者已写内容（可吸收、补充，避免重复）
+本周盘面回顾：{existing.get('market_review') or '（未填写）'}
 本周做对：{existing.get('right_things') or '（未填写）'}
 本周做错：{existing.get('wrong_things') or '（未填写）'}
 下周策略：{existing.get('next_strategy') or '（未填写）'}
 
 ## 写作要求
-1. 聚焦「可复制的正确行为」与「需杜绝的错误模式」，不要复述流水账
-2. 结合胜率、回撤、交易频率，判断本周是「乱动」「踏空」还是「节奏良好」
-3. 下周策略要具体：仓位基调（几成仓）、主攻方向（板块/风格）、一条纪律红线
-4. 语气直接、具体，禁止空话套话
+1. **本周盘面回顾**：资金去了哪些板块/风格？市场整体热度如何？大盘是向上、震荡还是向下？结合本周交易标的与指数表现写 4-6 句
+2. **做对的事**：聚焦可复制的正确行为，不要流水账
+3. **做错的事**：指出具体行为问题；点评每笔操作时务必带上**操作日期**（如「3月5日买入XX…」）
+4. **下周策略**：仓位基调（几成仓）、主攻方向、一条纪律红线
+5. 结合胜率、回撤、交易频率，判断本周节奏（乱动/踏空/良好）
+6. 语气直接、具体，禁止空话套话
 
 ## 输出要求
 严格输出 JSON：
 {{
+  "market_review": "4-6句，板块/热度/大盘方向/资金去向",
   "right_things": "4-6句，分点叙述也可",
-  "wrong_things": "4-6句，指出具体行为问题",
+  "wrong_things": "4-6句，每笔操作点评须含日期",
   "next_strategy": "3-5句，含仓位+方向+纪律"
 }}"""
 

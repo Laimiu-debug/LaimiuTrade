@@ -66,6 +66,12 @@ def ensure_schema() -> None:
         review_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(daily_reviews)"))}
         if "next_position_rehearsal" not in review_cols:
             conn.execute(text("ALTER TABLE daily_reviews ADD COLUMN next_position_rehearsal TEXT DEFAULT '[]'"))
+        if "rehearsal_ai_analysis" not in review_cols:
+            conn.execute(text("ALTER TABLE daily_reviews ADD COLUMN rehearsal_ai_analysis TEXT DEFAULT ''"))
+
+        weekly_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(weekly_reviews)"))}
+        if "market_review" not in weekly_cols:
+            conn.execute(text("ALTER TABLE weekly_reviews ADD COLUMN market_review TEXT DEFAULT ''"))
 
 
 def get_db():

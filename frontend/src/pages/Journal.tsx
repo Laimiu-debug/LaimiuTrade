@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { renderToStaticMarkup } from 'react-dom/server';
 import {
   api, fmtMoney, today, SCORE_DIMS,
   type DailyReview, type PositionRehearsal, type ScoreEntry, type SnapshotPosition,
   type TGroup, type TradeScoreBundle, type WatchItem,
 } from '../api';
 import { Empty, NumberInput, SideTag, useToast, DateInput, StockPicker } from '../components';
+import { exportDailyPdf } from '../exportPdf';
+import { fmtCnDate } from '../printCss';
+import { PrintDocHeader } from './periodicShared';
 
 type DayTrade = DailyReview['trades'][number];
 
@@ -277,10 +281,15 @@ function PrintTextBlock({ label, text }: { label: string; text: string }) {
   );
 }
 
-function JournalPrintReport({ data }: { data: DailyReview; day: string }) {
+function JournalPrintReport({ data, day, username }: { data: DailyReview; day: string; username: string }) {
   const tGroups = data.t_groups ?? [];
   return (
     <div className="journal-print-report">
+      <PrintDocHeader
+        username={username}
+        title="Trading MS 复盘日志"
+        subtitle={`${fmtCnDate(day)} · ${day}`}
+      />
       <div className="print-section">
         <h4>当日交易与 AI 分析</h4>
         {data.trades.length === 0 ? (
@@ -294,7 +303,7 @@ function JournalPrintReport({ data }: { data: DailyReview; day: string }) {
             <div className="print-trade-block" key={t.id}>
               <div className="print-trade-head">
                 <strong>{t.side === 'buy' ? '买入' : '卖出'} {t.name || t.code}</strong>
-                <span className="mono muted"> {t.code} · {t.price}×{t.qty}</span>
+                <span className="mono muted"> {day} · {t.code} · {t.price}×{t.qty}</span>
                 {tGroup && <span className="tag gold">做T</span>}
                 {avg != null && <span className="tag gold">均分 {avg}</span>}
               </div>
@@ -376,6 +385,13 @@ function JournalPrintReport({ data }: { data: DailyReview; day: string }) {
         </div>
       )}
 
+      {data.rehearsal_ai_analysis?.trim() && (
+        <div className="print-section">
+          <h4>明日预演 AI 分析</h4>
+          <div className="print-text-body">{data.rehearsal_ai_analysis}</div>
+        </div>
+      )}
+
       <div className="print-section">
         <h4>次日预研</h4>
         <PrintTextBlock label="大盘预判" text={data.next_market_forecast} />
@@ -420,6 +436,9 @@ export default function Journal() {
   const loadSeqRef = useRef(0);
   const [loading, setLoading] = useState(false);
   const [reviewing, setReviewing] = useState(false);
+  const [rehearsalReviewing, setRehearsalReviewing] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [username, setUsername] = useState('');
   const [saving, setSaving] = useState(false);
   const imgRef = useRef<HTMLInputElement>(null);
 
@@ -451,6 +470,7 @@ export default function Journal() {
         },
         prev_rehearsal: res.prev_rehearsal ?? [],
         rehearsal_compare: res.rehearsal_compare ?? [],
+        rehearsal_ai_analysis: res.rehearsal_ai_analysis ?? '',
       };
       setData(normalized);
       const keep = focusAfterLoadRef.current;
@@ -469,6 +489,10 @@ export default function Journal() {
       throw e;
     });
   }, [toast]);
+
+  useEffect(() => {
+    api.get<{ pdf_username?: string }>('/api/settings').then(v => setUsername(v.pdf_username ?? '')).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const q = searchParams.get('day');
@@ -551,6 +575,7 @@ export default function Journal() {
         next_position_plan: data.next_position_plan,
         next_risk_plan: data.next_risk_plan,
         next_position_rehearsal: data.next_position_rehearsal ?? [],
+        rehearsal_ai_analysis: data.rehearsal_ai_analysis ?? '',
       });
       if (!silent) toast('复盘已保存');
     } catch (e) { toast(String(e)); } finally { setSaving(false); }
@@ -687,6 +712,28 @@ export default function Journal() {
       });
       toast('AI 复盘草稿已生成，请核对后保存');
     } catch (e) { toast(String(e)); } finally { setReviewing(false); }
+  };
+
+  const aiRehearsal = async () => {
+    if (!rehearsal.length) { toast('请先填写明日操作预演'); return; }
+    await save(true);
+    setRehearsalReviewing(true);
+    try {
+      const result = await api.post<{ rehearsal_ai_analysis: string }>(`/api/reviews/daily/${day}/ai-rehearsal`);
+      patch({ rehearsal_ai_analysis: result.rehearsal_ai_analysis ?? '' });
+      toast('AI 预演分析已生成');
+    } catch (e) { toast(String(e)); } finally { setRehearsalReviewing(false); }
+  };
+
+  const exportPdf = async () => {
+    if (!data) return;
+    setExporting(true);
+    try {
+      const bodyHtml = renderToStaticMarkup(
+        <JournalPrintReport data={data} day={day} username={username} />,
+      );
+      await exportDailyPdf(day, bodyHtml, msg => toast(msg), msg => toast(msg));
+    } finally { setExporting(false); }
   };
 
   const setTradeFinalScore = (tradeId: number, dim: string, value: number) => {
@@ -827,21 +874,17 @@ export default function Journal() {
 
   return (
     <div className="fade-in journal-page">
-      <div className="page-head">
+      <div className="page-head no-print">
         <div>
           <h2 className="page-title">每日复盘</h2>
           <div className="page-sub">复盘是交易者的第二战场</div>
         </div>
-        <div className="row no-print">
+        <div className="row">
           <DateInput value={day} onChange={setDay} style={{ width: 150 }} />
-          <button onClick={() => window.print()}>导出 PDF</button>
+          <button onClick={exportPdf} disabled={exporting || !data}>{exporting ? '导出中…' : '导出 PDF'}</button>
           <button onClick={aiReview} disabled={reviewing}>{reviewing ? 'AI 复盘中…' : '✦ AI 复盘'}</button>
           <button className="primary" onClick={() => save()} disabled={saving}>{saving ? '保存中…' : '保存'}</button>
         </div>
-      </div>
-
-      <div className="print-only print-header">
-        <h3>Trading MS 每日复盘 · {day}</h3>
       </div>
 
       {loading && !data && (
@@ -1027,6 +1070,9 @@ export default function Journal() {
               <div className="row" style={{ gap: 8 }}>
                 <button className="ghost" onClick={copyTodayToRehearsal}>从今日持仓复制</button>
                 <button className="ghost" onClick={() => setRehearsal([...rehearsal, { code: '', name: '', qty: 0, note: '新开仓' }])}>+ 预演新开仓</button>
+                <button onClick={aiRehearsal} disabled={rehearsalReviewing || rehearsal.length === 0}>
+                  {rehearsalReviewing ? '分析中…' : '✦ AI 预演分析'}
+                </button>
               </div>
             </div>
             <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
@@ -1158,6 +1204,15 @@ export default function Journal() {
             )}
           </div>
 
+          {data.rehearsal_ai_analysis?.trim() && (
+            <div className="card" style={{ marginTop: 18 }}>
+              <h3 className="card-title">明日预演 AI 分析</h3>
+              <div className="journal-day-summary" style={{ marginTop: 0 }}>
+                {data.rehearsal_ai_analysis}
+              </div>
+            </div>
+          )}
+
           <div className="card" style={{ marginTop: 18 }}>
             <h3 className="card-title">次日预研</h3>
             <div className="grid grid-2">
@@ -1190,10 +1245,6 @@ export default function Journal() {
               </div>
             ))}
           </div>
-          </div>
-
-          <div className="print-only">
-            <JournalPrintReport data={data} day={day} />
           </div>
         </>
       )}

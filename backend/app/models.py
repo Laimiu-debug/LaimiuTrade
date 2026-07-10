@@ -84,6 +84,7 @@ class DailyReview(Base):
     next_position_plan: Mapped[str] = mapped_column(Text, default="")
     next_risk_plan: Mapped[str] = mapped_column(Text, default="")
     next_position_rehearsal: Mapped[str] = mapped_column(Text, default="[]")  # JSON: [{code,name,qty,note?}]
+    rehearsal_ai_analysis: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
@@ -96,6 +97,7 @@ class WeeklyReview(Base):
     week: Mapped[int] = mapped_column(Integer)  # ISO 周号
     right_things: Mapped[str] = mapped_column(Text, default="")
     wrong_things: Mapped[str] = mapped_column(Text, default="")
+    market_review: Mapped[str] = mapped_column(Text, default="")
     next_strategy: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 

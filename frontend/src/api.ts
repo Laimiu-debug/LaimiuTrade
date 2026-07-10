@@ -190,6 +190,7 @@ export interface DailyReview {
   rehearsal_baseline: RehearsalBaseline;
   prev_rehearsal: PositionRehearsal[];
   rehearsal_compare: RehearsalCompareRow[];
+  rehearsal_ai_analysis: string;
   trades: { id: number; code: string; name: string; side: string; price: number; qty: number; fees: number }[];
   t_groups: TGroup[];
   snapshot: SnapshotInfo | null;

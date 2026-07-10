@@ -22,7 +22,7 @@ from ..services import ai as ai_svc
 from ..services import capital_estimate as capital_est_svc
 from ..services import folder_dialog
 from ..services import market as market_svc
-from ..services import netvalue, rounds as rounds_svc, settings as settings_svc, stats
+from ..services import netvalue, pdf_export as pdf_export_svc, rounds as rounds_svc, settings as settings_svc, stats
 
 router = APIRouter(prefix="/api", tags=["misc"])
 
@@ -332,6 +332,34 @@ def day_detail(day: date, db: Session = Depends(get_db)):
 
 
 # ---------- 导出 ----------
+
+class PdfExportIn(BaseModel):
+    html: str
+    filename: str
+
+
+def _safe_pdf_filename(name: str) -> str:
+    cleaned = "".join(c if c not in '<>:"/\\|?*' else "_" for c in name.strip())
+    if not cleaned.lower().endswith(".pdf"):
+        cleaned += ".pdf"
+    return cleaned or "export.pdf"
+
+
+@router.post("/export/pdf")
+def export_pdf(body: PdfExportIn, db: Session = Depends(get_db)):
+    """将 HTML 渲染为 PDF 并保存到设置的 pdf_export_dir。"""
+    export_dir = settings_svc.get(db, "pdf_export_dir").strip()
+    if not export_dir:
+        raise HTTPException(400, "请先在设置中配置 PDF 保存路径")
+    target_dir = Path(export_dir).expanduser().resolve()
+    filename = _safe_pdf_filename(body.filename)
+    output_path = target_dir / filename
+    try:
+        pdf_export_svc.save_html_as_pdf(body.html, output_path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, str(exc)) from exc
+    return {"ok": True, "path": str(output_path), "filename": filename}
+
 
 @router.get("/export/json")
 def export_json(db: Session = Depends(get_db)):

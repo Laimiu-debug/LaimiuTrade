@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, fmtMoney, today } from '../api';
+import { clearPdfSettingsCache } from '../exportPdf';
 import { Empty, NumberInput, useToast, DateInput, Select } from '../components';
 
 const FLOW_KIND_OPTIONS = [
@@ -23,6 +24,8 @@ export default function Settings() {
   const [targetNote, setTargetNote] = useState('');
   const [moving, setMoving] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [pdfPickDir, setPdfPickDir] = useState('');
+  const [pickingPdf, setPickingPdf] = useState(false);
   const [testing, setTesting] = useState<'' | 'score' | 'ocr'>('');
   const [flows, setFlows] = useState<FlowRow[]>([]);
   const [flowForm, setFlowForm] = useState({ flow_date: today(), kind: 'deposit', amount: '', note: '' });
@@ -60,6 +63,7 @@ export default function Settings() {
       setScoreKeySet(Boolean(v.ai_score_api_key_set));
       setOcrKeySet(Boolean(v.ai_ocr_api_key_set));
       setDataDir(v.data_dir ?? '');
+      setPdfPickDir(v.pdf_export_dir ?? '');
       delete v.ai_score_api_key_set;
       delete v.ai_ocr_api_key_set;
       delete v.ai_api_key_set;
@@ -72,13 +76,28 @@ export default function Settings() {
 
   const save = async () => {
     try {
-      await api.put('/api/settings', { values });
+      await api.put('/api/settings', { values: { ...values, pdf_export_dir: pdfPickDir } });
+      clearPdfSettingsCache();
       toast('设置已保存');
       if (values.ai_score_api_key) setScoreKeySet(true);
       if (values.ai_ocr_api_key) setOcrKeySet(true);
       set('ai_score_api_key', '');
       set('ai_ocr_api_key', '');
     } catch (e) { toast(String(e)); }
+  };
+
+  const pickPdfFolder = async () => {
+    setPickingPdf(true);
+    try {
+      const r = await api.get<{ path: string | null; cancelled: boolean }>('/api/system/pick-folder');
+      if (r.cancelled || !r.path) return;
+      setPdfPickDir(r.path);
+      set('pdf_export_dir', r.path);
+    } catch (e) {
+      toast(String(e).replace(/^Error:\s*/, ''));
+    } finally {
+      setPickingPdf(false);
+    }
   };
 
   const pickFolder = async () => {
@@ -267,6 +286,36 @@ export default function Settings() {
           </label>
         </div>
         <div className="muted">仅在「上传截图识别」交易时使用，与打分互不影响。未配置时交易可手动录入。</div>
+      </div>
+
+      <div className="card" style={{ marginTop: 18 }}>
+        <h3 className="card-title">PDF 导出</h3>
+        <div className="grid grid-2">
+          <label className="field"><span>用户名（用于 PDF 页眉与文件名）</span>
+            <input
+              value={values.pdf_username ?? ''}
+              onChange={e => set('pdf_username', e.target.value)}
+              placeholder="如：张三"
+            />
+          </label>
+          <label className="field"><span>PDF 保存路径</span>
+            <div className="row" style={{ marginTop: 0 }}>
+              <input
+                style={{ flex: 1, minWidth: 200 }}
+                placeholder="留空则使用浏览器打印对话框另存为 PDF"
+                value={pdfPickDir}
+                onChange={e => { setPdfPickDir(e.target.value); set('pdf_export_dir', e.target.value); }}
+              />
+              <button type="button" onClick={pickPdfFolder} disabled={pickingPdf}>
+                {pickingPdf ? '选择中…' : '浏览…'}
+              </button>
+            </div>
+          </label>
+        </div>
+        <div className="muted">
+          配置保存路径后，导出将直接写入该目录（需 Windows Edge）。文件名示例：
+          <span className="mono">张三 Trading MS 7月10日 复盘日志.pdf</span>
+        </div>
       </div>
 
       <div className="card" style={{ marginTop: 18 }}>
