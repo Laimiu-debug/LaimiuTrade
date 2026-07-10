@@ -60,3 +60,19 @@ def sanitize_position(p: dict) -> dict:
         row["price"] = close
         row["close"] = close
     return row
+
+
+def is_etf_code(code: str | None) -> bool:
+    digits = "".join(ch for ch in (code or "") if ch.isdigit())
+    if len(digits) != 6:
+        return False
+    return digits.startswith(("51", "56", "58", "15", "16"))
+
+
+def price_looks_suspicious(price: float | None, code: str | None) -> bool:
+    """ETF 现价异常偏高（常见 OCR 小数点错位）。"""
+    if price is None or price <= 0:
+        return True
+    if is_etf_code(code) and price > 15:
+        return True
+    return False

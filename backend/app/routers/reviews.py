@@ -114,6 +114,16 @@ def _normalize_ai_trade_items(result: dict, expected_ids: list[int] | None) -> l
     return normalized
 
 
+def _sync_final_with_ai(dim_entry: dict, old_ai: int | None) -> None:
+    """AI 重新打分后同步 final；仅当用户未手动改过（final 为空或仍等于旧 ai）时更新。"""
+    new_ai = dim_entry.get("ai")
+    if new_ai is None:
+        return
+    final = dim_entry.get("final")
+    if final is None or (old_ai is not None and final == old_ai):
+        dim_entry["final"] = new_ai
+
+
 def _merge_trade_score_items(
     trade_scores: dict,
     items: list,
@@ -133,6 +143,12 @@ def _merge_trade_score_items(
             entry["_summary"] = {"comment": summary.strip()}
         for dim, val in _normalize_dim_scores(item.get("scores")).items():
             dim_entry = entry.get(dim) or {}
+            old_ai = dim_entry.get("ai")
+            if not isinstance(old_ai, int):
+                try:
+                    old_ai = int(old_ai) if old_ai is not None else None
+                except (TypeError, ValueError):
+                    old_ai = None
             score_raw = val.get("score")
             if score_raw is not None:
                 try:
@@ -140,8 +156,7 @@ def _merge_trade_score_items(
                 except (TypeError, ValueError):
                     pass
             dim_entry["comment"] = val.get("comment", "")
-            if dim_entry.get("final") is None and dim_entry.get("ai") is not None:
-                dim_entry["final"] = dim_entry["ai"]
+            _sync_final_with_ai(dim_entry, old_ai)
             entry[dim] = dim_entry
         trade_scores[key] = entry
         if (isinstance(summary, str) and summary.strip()) or any(
@@ -237,6 +252,12 @@ def _merge_group_score(trade_scores: dict, code: str, trade_ids: list[int], resu
     entry["_meta"] = {"kind": "t", "code": code, "trade_ids": trade_ids}
     for dim, val in _normalize_dim_scores(result.get("group_scores")).items():
         dim_entry = entry.get(dim) or {}
+        old_ai = dim_entry.get("ai")
+        if not isinstance(old_ai, int):
+            try:
+                old_ai = int(old_ai) if old_ai is not None else None
+            except (TypeError, ValueError):
+                old_ai = None
         score_raw = val.get("score")
         if score_raw is not None:
             try:
@@ -244,8 +265,7 @@ def _merge_group_score(trade_scores: dict, code: str, trade_ids: list[int], resu
             except (TypeError, ValueError):
                 pass
         dim_entry["comment"] = val.get("comment", "")
-        if dim_entry.get("final") is None and dim_entry.get("ai") is not None:
-            dim_entry["final"] = dim_entry["ai"]
+        _sync_final_with_ai(dim_entry, old_ai)
         entry[dim] = dim_entry
     trade_scores[key] = entry
 
@@ -370,8 +390,48 @@ def _position_close(p: dict) -> float | None:
     return position_util.position_close(p)
 
 
-def _enrich_positions(positions: list[dict]) -> list[dict]:
-    return [position_util.sanitize_position(p) for p in positions if isinstance(p, dict)]
+def _market_close_on_day(db: Session, code: str, day: date) -> float | None:
+    try:
+        klines = market_svc.get_daily(db, code, limit=90)["klines"]
+        day_str = day.isoformat()
+        valid = [k for k in klines if k["date"] <= day_str]
+        if not valid:
+            return None
+        return float(valid[-1]["close"])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _enrich_positions(
+    positions: list[dict],
+    db: Session | None = None,
+    day: date | None = None,
+) -> list[dict]:
+    out: list[dict] = []
+    for p in positions:
+        if not isinstance(p, dict):
+            continue
+        row = position_util.sanitize_position(p)
+        code = str(row.get("code") or "").strip()
+        digits = "".join(ch for ch in code if ch.isdigit())
+        close = position_util.position_close(row)
+        if db is not None and day is not None and len(digits) == 6:
+            if position_util.price_looks_suspicious(close, code) or row.get("market_value") is None:
+                mclose = _market_close_on_day(db, digits.zfill(6), day)
+                if mclose is not None and mclose > 0:
+                    row["close"] = round(mclose, 4)
+                    row["price"] = row["close"]
+                    qty = row.get("qty")
+                    try:
+                        q = int(qty) if qty is not None else 0
+                    except (TypeError, ValueError):
+                        q = 0
+                    if q > 0:
+                        row["market_value"] = round(q * row["close"], 2)
+        elif close is not None:
+            row["close"] = close
+        out.append(row)
+    return out
 
 
 def _rehearsal_baseline(db: Session, day: date, snap: Snapshot | None) -> dict:
@@ -400,10 +460,10 @@ def _positions_for_day(db: Session, day: date) -> list[dict]:
     if snap:
         positions = json.loads(snap.positions or "[]")
         if isinstance(positions, list) and positions:
-            return _enrich_positions(positions)
+            return _enrich_positions(positions, db, day)
     est = capital_est_svc.estimate_snapshot(db, day)
     if est.get("ok") and est.get("positions"):
-        return _enrich_positions(est["positions"])
+        return _enrich_positions(est["positions"], db, day)
     return []
 
 

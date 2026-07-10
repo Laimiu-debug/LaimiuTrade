@@ -67,6 +67,10 @@ function organizeSections(trades: DayTrade[], tGroups: TGroup[]) {
   return sections;
 }
 
+function scoreForDots(entry: ScoreEntry): number {
+  return entry.final ?? entry.ai ?? 0;
+}
+
 function ScoreDimRows({
   scores,
   onSetScore,
@@ -80,6 +84,7 @@ function ScoreDimRows({
     <>
       {Object.entries(SCORE_DIMS).map(([dim, label]) => {
         const entry = scores[dim] ?? {};
+        const dotScore = scoreForDots(entry);
         const dimLabel = dim === 'entry' && side === 'sell' ? '买点质量'
           : dim === 'exit' && side === 'buy' ? '卖点质量'
           : label;
@@ -95,7 +100,7 @@ function ScoreDimRows({
                 <button
                   key={v}
                   type="button"
-                  className={`score-dot no-print${(entry.final ?? 0) >= v ? ' on' : ''}`}
+                  className={`score-dot no-print${dotScore >= v ? ' on' : ''}`}
                   title={`${v}分`}
                   disabled={!onSetScore}
                   onClick={() => onSetScore?.(dim, v)}
@@ -444,6 +449,7 @@ export default function Journal() {
   const loadSeqRef = useRef(0);
   const [loading, setLoading] = useState(false);
   const [reviewing, setReviewing] = useState(false);
+  const [copyingRehearsal, setCopyingRehearsal] = useState(false);
   const [rehearsalReviewing, setRehearsalReviewing] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [username, setUsername] = useState('');
@@ -783,24 +789,37 @@ export default function Journal() {
     setRehearsal(rehearsal.map((r, idx) => (idx === i ? { ...r, ...p } : r)));
   };
 
-  const copyTodayToRehearsal = () => {
+  const copyTodayToRehearsal = async () => {
     if (!data) return;
     const all = data.today_positions ?? [];
     const skipped = all.filter(p => !p.code && (p.qty ?? 0) > 0);
-    const base = all
-      .filter(p => p.code && (p.qty ?? 0) > 0)
-      .map(p => ({
-        code: p.code!,
-        name: p.name ?? '',
-        qty: p.qty ?? 0,
-        close: positionClose(p) ?? undefined,
-        note: '',
-      }));
-    setRehearsal(base);
-    if (skipped.length > 0) {
-      toast(`有 ${skipped.length} 条持仓缺少代码未复制，请先在资金账本编辑补全`);
-    } else {
-      toast('已从今日持仓复制，可调整数量（0=清仓）或添加新开仓');
+    const filtered = all.filter(p => p.code && (p.qty ?? 0) > 0);
+    setCopyingRehearsal(true);
+    try {
+      const base = await Promise.all(
+        filtered.map(async (p) => {
+          const code = p.code!;
+          const fetched = await fetchCloseOnDay(code, day);
+          const close = fetched ?? positionClose(p) ?? undefined;
+          return {
+            code,
+            name: p.name ?? '',
+            qty: p.qty ?? 0,
+            close,
+            note: '',
+          };
+        }),
+      );
+      setRehearsal(base);
+      if (skipped.length > 0) {
+        toast(`有 ${skipped.length} 条持仓缺少代码未复制，请先在资金账本编辑补全`);
+      } else {
+        toast('已从今日持仓复制（收盘价取自行情），可调整数量（0=清仓）');
+      }
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setCopyingRehearsal(false);
     }
   };
 
@@ -1082,7 +1101,9 @@ export default function Journal() {
             <div className="page-head" style={{ marginBottom: 12 }}>
               <h3 className="card-title" style={{ margin: 0 }}>明日操作预演</h3>
               <div className="row" style={{ gap: 8 }}>
-                <button className="ghost" onClick={copyTodayToRehearsal}>从今日持仓复制</button>
+                <button className="ghost" onClick={() => { void copyTodayToRehearsal(); }} disabled={copyingRehearsal}>
+                  {copyingRehearsal ? '拉取行情中…' : '从今日持仓复制'}
+                </button>
                 <button className="ghost" onClick={() => setRehearsal([...rehearsal, { code: '', name: '', qty: 0, note: '新开仓' }])}>+ 预演新开仓</button>
                 <button onClick={aiRehearsal} disabled={rehearsalReviewing || rehearsal.length === 0}>
                   {rehearsalReviewing ? '分析中…' : '✦ AI 预演分析'}
