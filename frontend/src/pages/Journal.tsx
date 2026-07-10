@@ -252,11 +252,19 @@ const REHEARSAL_STATUS: Record<string, string> = {
 };
 
 function positionClose(p: SnapshotPosition | PositionRehearsal): number | null {
-  if (p.close != null && p.close > 0) return p.close;
-  if ('price' in p && p.price != null && p.price > 0) return p.price;
-  if ('market_value' in p && p.market_value != null && p.qty != null && p.qty > 0) {
-    return Math.round((p.market_value / p.qty) * 1000) / 1000;
+  const qty = p.qty;
+  const mv = 'market_value' in p ? p.market_value : undefined;
+  const rawPrice = 'price' in p ? p.price : undefined;
+  if (mv != null && qty != null && qty > 0) {
+    const implied = mv / qty;
+    if (rawPrice != null && rawPrice > 0) {
+      const ratio = rawPrice / implied;
+      if (ratio >= 5 || ratio <= 0.2) return Math.round(implied * 10000) / 10000;
+    }
+    return Math.round(implied * 10000) / 10000;
   }
+  if (p.close != null && p.close > 0) return p.close;
+  if (rawPrice != null && rawPrice > 0) return rawPrice;
   return null;
 }
 

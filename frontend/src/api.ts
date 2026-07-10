@@ -1,11 +1,16 @@
 const BASE = '';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const resp = await fetch(BASE + url, {
-    method,
-    headers: body instanceof FormData ? undefined : { 'Content-Type': 'application/json' },
-    body: body instanceof FormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(BASE + url, {
+      method,
+      headers: body instanceof FormData ? undefined : { 'Content-Type': 'application/json' },
+      body: body instanceof FormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new Error('无法连接本地服务，请确认 TradingMS 已启动（托盘图标在运行）');
+  }
   if (!resp.ok) {
     let detail = resp.statusText;
     try {

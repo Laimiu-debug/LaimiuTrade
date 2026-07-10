@@ -386,9 +386,18 @@ def generate_rehearsal_analysis(
             name = p.get("name") or code
             qty = p.get("qty", 0)
             note = p.get("note") or ""
-            close = p.get("close")
+            mv = p.get("market_value")
+            close = p.get("close") or p.get("price")
+            if mv and qty:
+                try:
+                    close = round(float(mv) / int(qty), 4)
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
             extra = f" @{close}" if close else ""
-            lines.append(f"- {name}({code}) 预演{qty}股{extra}{(' · ' + note) if note else ''}")
+            mv_hint = f" 市值{mv}" if mv else ""
+            lines.append(
+                f"- {name}({code}) {qty}股{extra}{mv_hint}{(' · ' + note) if note else ''}"
+            )
         return "\n".join(lines)
 
     watch_block = "\n".join(
@@ -427,7 +436,7 @@ def generate_rehearsal_analysis(
 ## 输出要求
 直接输出中文分析正文（非 JSON），4-8 段，包含：
 1. 预演仓位变化解读（增减仓/新开/清仓的逻辑）
-2. 资金与仓位匹配度（现金是否充裕、是否过度集中）
+2. 资金与仓位匹配度（现金是否充裕、是否过度集中；若 price×qty 远超总资产，应指出该标的现价可能有 OCR 小数点错误，以市值÷数量为准）
 3. 预研与预演是否一致（预判、观察标的、预演持仓是否对得上）
 4. 潜在风险与改进建议（具体、可执行）
 语气直接，禁止空话。"""

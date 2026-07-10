@@ -11,6 +11,7 @@ from ..models import DailyReview, MonthlyReview, Snapshot, Trade, WeeklyReview
 from ..services import ai as ai_svc
 from ..services import market as market_svc
 from ..services import capital_estimate as capital_est_svc
+from ..services import position_util
 from ..services import netvalue, rounds as rounds_svc, stats
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
@@ -366,40 +367,11 @@ def _run_ai_score_t_group(db: Session, row: DailyReview, day: date, code: str, t
 
 
 def _position_close(p: dict) -> float | None:
-    if not isinstance(p, dict):
-        return None
-    for key in ("close", "price"):
-        raw = p.get(key)
-        if raw is not None:
-            try:
-                val = float(raw)
-                if val > 0:
-                    return round(val, 3)
-            except (TypeError, ValueError):
-                pass
-    mv = p.get("market_value")
-    qty = p.get("qty")
-    if mv is not None and qty:
-        try:
-            q = int(qty)
-            if q > 0:
-                return round(float(mv) / q, 3)
-        except (TypeError, ValueError, ZeroDivisionError):
-            pass
-    return None
+    return position_util.position_close(p)
 
 
 def _enrich_positions(positions: list[dict]) -> list[dict]:
-    out: list[dict] = []
-    for p in positions:
-        if not isinstance(p, dict):
-            continue
-        row = dict(p)
-        close = _position_close(row)
-        if close is not None:
-            row["close"] = close
-        out.append(row)
-    return out
+    return [position_util.sanitize_position(p) for p in positions if isinstance(p, dict)]
 
 
 def _rehearsal_baseline(db: Session, day: date, snap: Snapshot | None) -> dict:
