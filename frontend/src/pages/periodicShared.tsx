@@ -229,22 +229,30 @@ export function PeriodRoundsPrint({ rounds }: { rounds: LinkedRoundRow[]; title?
       <div className="print-rounds-list">
         {rounds.map(r => {
           const text = roundDisplaySummary(r.review_summary, r.review_snippet);
-          const sideCls = r.pnl != null ? (r.pnl >= 0 ? 'pos' : 'neg') : '';
+          const win = r.pnl != null && r.pnl >= 0;
+          const lose = r.pnl != null && r.pnl < 0;
           return (
             <div className="print-round-card" key={`${r.code}-${r.start_date}`}>
-              <div className="print-round-card-head">
-                <div className="print-round-card-name">{r.name}</div>
-                <div className="print-round-card-meta mono">
-                  {r.code} · {r.start_date} → {r.end_date ?? '持仓中'}
+              <div className="print-round-card-top">
+                <div className="print-round-card-main">
+                  <div className="print-round-card-name">{r.name}</div>
+                  <div className="print-round-card-meta mono">
+                    {r.code} · {r.start_date} → {r.end_date ?? '持仓中'}
+                  </div>
                 </div>
-                <div className={`print-round-card-pnl mono ${sideCls}`}>
-                  {r.pnl != null ? `¥${fmtMoney(r.pnl)} · ${fmtPct(r.pnl_pct)}` : '持仓中'}
-                </div>
+                {r.pnl != null ? (
+                  <div className={`print-round-pnl-badge${win ? ' win' : lose ? ' lose' : ''}`}>
+                    <span className="print-round-pnl-amt mono">¥{fmtMoney(r.pnl)}</span>
+                    <span className="print-round-pnl-pct mono">{fmtPct(r.pnl_pct)}</span>
+                  </div>
+                ) : (
+                  <span className="print-round-status-tag">持仓中</span>
+                )}
               </div>
               {text ? (
-                <div className="print-round-snippet">{text}</div>
+                <p className="print-round-snippet">{text}</p>
               ) : (
-                <div className="print-round-snippet is-empty">（未填写回合复盘摘要）</div>
+                <p className="print-round-snippet is-empty">（未填写回合复盘摘要）</p>
               )}
             </div>
           );
@@ -329,10 +337,10 @@ export function WeeklyPrintBody({
         </PrintSection>
       )}
       <PrintSection title="复盘正文">
-        <PrintTextBlock label="本周盘面回顾" text={market_review} />
-        <PrintTextBlock label="本周做对的事" text={right_things} />
-        <PrintTextBlock label="本周做错的事" text={wrong_things} />
-        <PrintTextBlock label="下周策略" text={next_strategy} />
+        <PrintTextBlock plain label="本周盘面回顾" text={market_review} />
+        <PrintTextBlock plain label="本周做对的事" text={right_things} />
+        <PrintTextBlock plain label="本周做错的事" text={wrong_things} />
+        <PrintTextBlock plain label="下周策略" text={next_strategy} />
       </PrintSection>
     </PrintDocument>
   );
@@ -374,8 +382,8 @@ export function MonthlyPrintBody({
         </div>
       </PrintSection>
       <PrintSection title="体系与目标">
-        <PrintTextBlock label="体系迭代" text={system_iteration} />
-        <PrintTextBlock label="下月目标" text={next_goal} />
+        <PrintTextBlock plain label="体系迭代" text={system_iteration} />
+        <PrintTextBlock plain label="下月目标" text={next_goal} />
       </PrintSection>
     </PrintDocument>
   );

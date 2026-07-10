@@ -207,11 +207,13 @@ def extract_print_css() -> str:
     inner = block.replace("@media print {", "").rsplit("}", 1)[0]
     base = """
 :root {
-  --bg: #f5f0e6; --surface: #ffffff; --surface-2: #fbf7ef; --surface-3: #f1e9da;
+  --bg: #f5f0e6; --bg-deep: #ece5d6;
+  --surface: #ffffff; --surface-2: #fbf7ef; --surface-3: #f1e9da;
   --border: #e6dcc6; --border-strong: #d2c4a3;
   --text: #3a322a; --text-2: #7a6f5e; --text-3: #a89c86;
   --gold: #e8a87c; --gold-bright: #d98a52; --gold-dim: rgba(232, 168, 124, 0.22);
-  --up: #ff6b6b; --down: #4ecdc4;
+  --up: #ff6b6b; --up-dim: rgba(255, 107, 107, 0.14);
+  --down: #4ecdc4; --down-dim: rgba(78, 205, 196, 0.14);
   --font-body: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
   --font-display: Georgia, "Times New Roman", "STZhongsong", "SimSun", serif;
   --font-mono: Consolas, "Cascadia Code", monospace;

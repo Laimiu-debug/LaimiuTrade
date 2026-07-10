@@ -1408,7 +1408,9 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
     --gold-bright: #d98a52;
     --gold-dim: rgba(232, 168, 124, 0.22);
     --up: #ff6b6b;
+    --up-dim: rgba(255, 107, 107, 0.14);
     --down: #4ecdc4;
+    --down-dim: rgba(78, 205, 196, 0.14);
   }
 
   * {
@@ -1418,7 +1420,7 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
 
   @page {
     margin: 16mm 14mm 18mm;
-    background: #f5f0e6;
+    background: var(--bg);
   }
 
   body {
@@ -1538,35 +1540,41 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
     page-break-after: avoid;
   }
   .print-section-body {
-    padding: 12px 14px 14px;
+    padding: 14px 14px 16px;
     break-inside: auto;
     page-break-inside: auto;
   }
 
-  /* ---- 统计网格 ---- */
+  /* ---- 统计条：单行五列，避免 3+2 留白 ---- */
   .print-stat-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
-  }
-  .print-stat-card {
-    padding: 10px 10px 8px;
-    background: var(--surface-2) !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0;
     border: 1px solid var(--border) !important;
     border-radius: var(--radius-sm);
-    text-align: center;
+    overflow: hidden;
   }
+  .print-stat-card {
+    padding: 10px 12px 9px;
+    background: var(--surface-2) !important;
+    border: none !important;
+    border-right: 1px solid var(--border) !important;
+    border-radius: 0;
+    text-align: left;
+  }
+  .print-stat-card:last-child { border-right: none !important; }
   .print-stat-label {
     font-size: 9px;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
     color: var(--text-3) !important;
-    margin-bottom: 4px;
+    margin-bottom: 5px;
   }
   .print-stat-value {
     font-family: var(--font-mono);
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text) !important;
+    line-height: 1.2;
   }
   .print-stat-value.pos { color: var(--up) !important; }
   .print-stat-value.neg { color: var(--down) !important; }
@@ -1650,6 +1658,31 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
   .print-text-block.is-empty .print-text-body {
     color: var(--text-3) !important;
     font-style: italic;
+  }
+  .print-text-block--plain {
+    margin-bottom: 14px;
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+  .print-text-block--plain:last-child { margin-bottom: 0; }
+  .print-text-block--plain .print-text-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--gold-bright) !important;
+    margin-bottom: 5px;
+  }
+  .print-text-block--plain .print-text-body {
+    padding: 0 0 0 10px;
+    background: transparent !important;
+    border: none !important;
+    border-left: 2px solid var(--gold-bright) !important;
+    border-radius: 0;
+    font-size: 11px;
+    line-height: 1.75;
+  }
+  .print-text-block--plain.is-empty .print-text-body {
+    border-left-color: var(--border) !important;
   }
 
   /* ---- 摘要框 ---- */
@@ -1858,56 +1891,100 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
   .print-rounds-summary {
     font-size: 10px;
     color: var(--text-3) !important;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px dashed var(--border);
   }
   .print-rounds-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
   }
   .print-round-card {
-    padding: 8px 10px;
+    padding: 10px 12px 11px;
     background: var(--surface-2) !important;
     border: 1px solid var(--border) !important;
     border-radius: var(--radius-sm);
     break-inside: avoid;
     page-break-inside: avoid;
   }
-  .print-round-card-head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 6px 12px;
-    margin-bottom: 6px;
+  .print-round-card-top {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: start;
+  }
+  .print-round-card-main {
+    min-width: 0;
   }
   .print-round-card-name {
     font-weight: 600;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text) !important;
+    line-height: 1.3;
+    margin-bottom: 3px;
   }
   .print-round-card-meta {
     font-size: 9px;
     color: var(--text-3) !important;
+    line-height: 1.4;
   }
-  .print-round-card-pnl {
-    margin-left: auto;
-    font-size: 10px;
+  .print-round-pnl-badge {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+    padding: 5px 8px;
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+  }
+  .print-round-pnl-badge.win {
+    background: var(--up-dim) !important;
+    border-color: rgba(255, 107, 107, 0.35) !important;
+  }
+  .print-round-pnl-badge.lose {
+    background: var(--down-dim) !important;
+    border-color: rgba(78, 205, 196, 0.35) !important;
+  }
+  .print-round-pnl-amt {
+    font-size: 11px;
     font-weight: 600;
+    color: var(--text) !important;
+    line-height: 1.2;
+  }
+  .print-round-pnl-pct {
+    font-size: 9px;
+    color: var(--text-3) !important;
+    line-height: 1.2;
+  }
+  .print-round-pnl-badge.win .print-round-pnl-amt,
+  .print-round-pnl-badge.win .print-round-pnl-pct { color: var(--up) !important; }
+  .print-round-pnl-badge.lose .print-round-pnl-amt,
+  .print-round-pnl-badge.lose .print-round-pnl-pct { color: var(--down) !important; }
+  .print-round-status-tag {
+    font-size: 9px;
+    padding: 4px 8px;
+    color: var(--text-3) !important;
+    background: var(--surface-2) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
   }
   .print-round-snippet {
+    margin: 9px 0 0;
+    padding-top: 9px;
+    border-top: 1px solid var(--border);
     font-size: 10px;
-    line-height: 1.6;
+    line-height: 1.7;
     color: var(--text-2) !important;
     white-space: pre-wrap;
-    padding: 6px 8px;
-    background: var(--surface) !important;
-    border-left: 2px solid var(--gold-bright);
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    word-break: break-word;
   }
   .print-round-snippet.is-empty {
     font-style: italic;
     color: var(--text-3) !important;
-    border-left-color: var(--border);
   }
 
   /* ---- 页脚 ---- */

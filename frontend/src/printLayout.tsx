@@ -73,14 +73,16 @@ export function PrintTextBlock({
   label,
   text,
   placeholder = '（未填写）',
+  plain = false,
 }: {
   label: string;
   text: string;
   placeholder?: string;
+  plain?: boolean;
 }) {
   const empty = !text?.trim();
   return (
-    <div className={`print-text-block${empty ? ' is-empty' : ''}`}>
+    <div className={`print-text-block${empty ? ' is-empty' : ''}${plain ? ' print-text-block--plain' : ''}`}>
       <div className="print-text-label">{label}</div>
       <div className="print-text-body">{empty ? placeholder : text}</div>
     </div>
