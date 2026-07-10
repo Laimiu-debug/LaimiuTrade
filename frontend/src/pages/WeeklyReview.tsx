@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { api } from '../api';
-import { exportWeeklyPdf } from '../exportPdf';
+import { printWeeklyReview } from '../printPage';
 import { useToast } from '../components';
 import { useAiBusy } from '../AiBusy';
 import { confirmDiscard, useAutosave, useDirtyGuard } from '../hooks/usePersist';
@@ -42,7 +41,6 @@ export default function WeeklyReview() {
   const [reviewing, setReviewing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [autoSavedAt, setAutoSavedAt] = useState<number | null>(null);
-  const [exporting, setExporting] = useState(false);
 
   const currentSnapshot = useMemo(
     () => (weekly ? weeklySaveSnapshot(weekly) : ''),
@@ -121,31 +119,10 @@ export default function WeeklyReview() {
     }
   };
 
-  const exportPdf = async () => {
+  const handlePrint = async () => {
     if (!weekly) return;
-    await save(true);
-    setExporting(true);
-    try {
-      const bodyHtml = renderToStaticMarkup(
-        <WeeklyPrintBody
-          username={username}
-          year={wk.year}
-          week={wk.week}
-          periodLabel={periodLabel}
-          auto={weekly.auto}
-          market_review={weekly.market_review}
-          right_things={weekly.right_things}
-          wrong_things={weekly.wrong_things}
-          next_strategy={weekly.next_strategy}
-          period_rounds={weekly.period_rounds}
-        />,
-      );
-      await exportWeeklyPdf(
-        wk.year, wk.week, bodyHtml,
-        msg => toast(msg),
-        msg => toast(msg),
-      );
-    } finally { setExporting(false); }
+    if (dirty) await save(true);
+    printWeeklyReview(username, wk.year, wk.week, msg => toast(msg));
   };
 
   const periodLabel = weekly ? `${weekly.auto.start} ~ ${weekly.auto.end}` : '';
@@ -163,13 +140,13 @@ export default function WeeklyReview() {
               {saving ? '保存中…' : dirty ? '有未保存修改' : `已自动保存 ${new Date(autoSavedAt!).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`}
             </span>
           )}
-          <button onClick={exportPdf} disabled={exporting || !weekly}>{exporting ? '导出中…' : '导出 PDF'}</button>
+          <button onClick={handlePrint} disabled={!weekly}>打印</button>
           <button onClick={aiReview} disabled={reviewing}>{reviewing ? 'AI 复盘中…' : '✦ AI 复盘'}</button>
           <button className="primary" onClick={() => save()} disabled={saving}>{saving ? '保存中…' : '保存'}</button>
         </div>
       </div>
 
-      <div className="periodic-shell">
+      <div className="periodic-shell no-print">
         <div className="periodic-toolbar no-print">
           <h3 className="periodic-period-title">
             {wk.year} 第 {wk.week} 周
@@ -208,6 +185,23 @@ export default function WeeklyReview() {
           </>
         )}
       </div>
+
+      {weekly && (
+        <div className="print-only">
+          <WeeklyPrintBody
+            username={username}
+            year={wk.year}
+            week={wk.week}
+            periodLabel={periodLabel}
+            auto={weekly.auto}
+            market_review={weekly.market_review}
+            right_things={weekly.right_things}
+            wrong_things={weekly.wrong_things}
+            next_strategy={weekly.next_strategy}
+            period_rounds={weekly.period_rounds}
+          />
+        </div>
+      )}
     </div>
   );
 }

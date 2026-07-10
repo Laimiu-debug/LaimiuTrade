@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { renderToStaticMarkup } from 'react-dom/server';
 import {
   api, fmtMoney, today, SCORE_DIMS,
   type DailyReview, type PositionRehearsal, type ScoreEntry, type SnapshotPosition,
   type TGroup, type TradeScoreBundle, type WatchItem,
 } from '../api';
 import { Empty, NumberInput, SideTag, useToast, DateInput, StockPicker } from '../components';
-import { exportDailyPdf } from '../exportPdf';
+import { printDailyReview } from '../printPage';
 import { fmtCnDate } from '../printCss';
 import { PrintDocHeader, PeriodRounds } from './periodicShared';
 import { useAiBusy } from '../AiBusy';
@@ -488,7 +487,6 @@ export default function Journal() {
   const [reviewing, setReviewing] = useState(false);
   const [copyingRehearsal, setCopyingRehearsal] = useState(false);
   const [rehearsalReviewing, setRehearsalReviewing] = useState(false);
-  const [exporting, setExporting] = useState(false);
   const [username, setUsername] = useState('');
   const [saving, setSaving] = useState(false);
   const [autoSavedAt, setAutoSavedAt] = useState<number | null>(null);
@@ -829,15 +827,9 @@ export default function Journal() {
     }
   };
 
-  const exportPdf = async () => {
+  const handlePrint = () => {
     if (!data) return;
-    setExporting(true);
-    try {
-      const bodyHtml = renderToStaticMarkup(
-        <JournalPrintReport data={data} day={day} username={username} />,
-      );
-      await exportDailyPdf(day, bodyHtml, msg => toast(msg), msg => toast(msg));
-    } finally { setExporting(false); }
+    printDailyReview(username, day, msg => toast(msg));
   };
 
   const setTradeFinalScore = (tradeId: number, dim: string, value: number) => {
@@ -1009,7 +1001,7 @@ export default function Journal() {
               {saving ? '保存中…' : dirty ? '有未保存修改' : `已自动保存 ${new Date(autoSavedAt!).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`}
             </span>
           )}
-          <button onClick={exportPdf} disabled={exporting || !data}>{exporting ? '导出中…' : '导出 PDF'}</button>
+          <button onClick={handlePrint} disabled={!data}>打印</button>
           <button onClick={aiReview} disabled={reviewing}>{reviewing ? 'AI 复盘中…' : '✦ AI 复盘'}</button>
           <button className="primary" onClick={() => save()} disabled={saving}>{saving ? '保存中…' : '保存'}</button>
         </div>
@@ -1388,6 +1380,10 @@ export default function Journal() {
               </div>
             ))}
           </div>
+          </div>
+
+          <div className="print-only">
+            <JournalPrintReport data={data} day={day} username={username} />
           </div>
         </>
       )}

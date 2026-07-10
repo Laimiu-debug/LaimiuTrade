@@ -30,6 +30,8 @@ DEFAULTS: dict[str, str] = {
     # PDF 导出
     "pdf_username": "",
     "pdf_export_dir": "",
+    # 界面：AI 长任务等待提示 — banner（顶部条）| overlay（全屏遮罩）
+    "ai_busy_mode": "banner",
 }
 
 

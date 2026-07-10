@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtMoney, today } from '../api';
 import { clearPdfSettingsCache } from '../exportPdf';
+import { SETTINGS_UPDATED_EVENT } from '../AiBusy';
 import { Empty, NumberInput, useToast, DateInput, Select } from '../components';
+
+const AI_BUSY_MODE_OPTIONS = [
+  { value: 'banner', label: '顶部提示条（可继续操作，推荐）' },
+  { value: 'overlay', label: '全屏遮罩（阻止操作直到完成）' },
+];
 
 const FLOW_KIND_OPTIONS = [
   { value: 'initial', label: '初始资金' },
@@ -80,6 +86,7 @@ export default function Settings() {
     try {
       await api.put('/api/settings', { values: { ...values, pdf_export_dir: pdfPickDir } });
       clearPdfSettingsCache();
+      window.dispatchEvent(new Event(SETTINGS_UPDATED_EVENT));
       toast('设置已保存');
       if (values.ai_score_api_key) setScoreKeySet(true);
       if (values.ai_ocr_api_key) setOcrKeySet(true);
@@ -273,6 +280,21 @@ export default function Settings() {
           <div className="muted">
             tdx：本地通达信日线直读，最快；akshare：免费公开接口；web：东方财富公开行情。逐源降级尝试。
           </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 18 }}>
+        <h3 className="card-title">AI 等待提示</h3>
+        <label className="field" style={{ maxWidth: 420 }}>
+          <span>长任务（打分、复盘、预演分析）进行时的提示方式</span>
+          <Select
+            value={values.ai_busy_mode === 'overlay' ? 'overlay' : 'banner'}
+            onChange={v => set('ai_busy_mode', v)}
+            options={AI_BUSY_MODE_OPTIONS}
+          />
+        </label>
+        <div className="muted">
+          顶部提示条不会挡住页面，适合等待较久时继续查看或编辑；全屏遮罩会阻止操作直到 AI 返回。
         </div>
       </div>
 

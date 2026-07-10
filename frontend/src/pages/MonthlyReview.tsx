@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { api } from '../api';
-import { exportMonthlyPdf } from '../exportPdf';
+import { printMonthlyReview } from '../printPage';
 import { useToast } from '../components';
 import { useAiBusy } from '../AiBusy';
 import { confirmDiscard, useAutosave, useDirtyGuard } from '../hooks/usePersist';
@@ -38,7 +37,6 @@ export default function MonthlyReview() {
   const [reviewing, setReviewing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [autoSavedAt, setAutoSavedAt] = useState<number | null>(null);
-  const [exporting, setExporting] = useState(false);
 
   const currentSnapshot = useMemo(
     () => (monthly ? monthlySaveSnapshot(monthly) : ''),
@@ -113,30 +111,10 @@ export default function MonthlyReview() {
     }
   };
 
-  const exportPdf = async () => {
+  const handlePrint = async () => {
     if (!monthly) return;
-    await save(true);
-    setExporting(true);
-    try {
-      const bodyHtml = renderToStaticMarkup(
-        <MonthlyPrintBody
-          username={username}
-          year={mo.year}
-          month={mo.month}
-          periodLabel={periodLabel}
-          auto={monthly.auto}
-          node_state={monthly.node_state}
-          system_iteration={monthly.system_iteration}
-          next_goal={monthly.next_goal}
-          period_rounds={monthly.period_rounds}
-        />,
-      );
-      await exportMonthlyPdf(
-        mo.year, mo.month, bodyHtml,
-        msg => toast(msg),
-        msg => toast(msg),
-      );
-    } finally { setExporting(false); }
+    if (dirty) await save(true);
+    printMonthlyReview(username, mo.year, mo.month, msg => toast(msg));
   };
 
   const periodLabel = monthly ? `${monthly.auto.start} ~ ${monthly.auto.end}` : '';
@@ -154,13 +132,13 @@ export default function MonthlyReview() {
               {saving ? '保存中…' : dirty ? '有未保存修改' : `已自动保存 ${new Date(autoSavedAt!).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`}
             </span>
           )}
-          <button onClick={exportPdf} disabled={exporting || !monthly}>{exporting ? '导出中…' : '导出 PDF'}</button>
+          <button onClick={handlePrint} disabled={!monthly}>打印</button>
           <button onClick={aiReview} disabled={reviewing}>{reviewing ? 'AI 复盘中…' : '✦ AI 复盘'}</button>
           <button className="primary" onClick={() => save()} disabled={saving}>{saving ? '保存中…' : '保存'}</button>
         </div>
       </div>
 
-      <div className="periodic-shell">
+      <div className="periodic-shell no-print">
         <div className="periodic-toolbar no-print">
           <h3 className="periodic-period-title">{mo.year} 年 {mo.month} 月</h3>
           <span className="row">
@@ -190,6 +168,22 @@ export default function MonthlyReview() {
           </>
         )}
       </div>
+
+      {monthly && (
+        <div className="print-only">
+          <MonthlyPrintBody
+            username={username}
+            year={mo.year}
+            month={mo.month}
+            periodLabel={periodLabel}
+            auto={monthly.auto}
+            node_state={monthly.node_state}
+            system_iteration={monthly.system_iteration}
+            next_goal={monthly.next_goal}
+            period_rounds={monthly.period_rounds}
+          />
+        </div>
+      )}
     </div>
   );
 }
