@@ -39,41 +39,28 @@ def _parse_money(val) -> float | None:
         return None
 
 
-def _fix_ocr_price(
+def _price_from_screenshot(
     price: float | None,
     qty: int | None,
     market_value: float | None,
-    code: str | None,
-    db: Session,
 ) -> float | None:
-    """用市值/数量与行情收盘价纠正 OCR 小数点错位（如 ETF 3.93→39.3）。"""
+    """以截图市值÷数量为基准定价，仅修正明显的小数点错位（如 39.3→3.93）。"""
     if qty is None or qty <= 0:
-        return price
-    implied: float | None = None
+        return price if price and price > 0 else None
     if market_value is not None and market_value > 0:
         implied = market_value / qty
-    if price is None:
-        return round(implied, 4) if implied is not None else None
-    if implied is not None and implied > 0:
+        if price is None or price <= 0:
+            return round(implied, 4)
         ratio = price / implied
-        if ratio > 2.5 or ratio < 0.4:
-            price = round(implied, 4)
-    clean = "".join(ch for ch in (code or "") if ch.isdigit())
-    if len(clean) == 6:
-        try:
-            klines = market_svc.get_daily(db, clean.zfill(6), limit=15)["klines"]
-            if klines:
-                close = float(klines[-1]["close"])
-                if close > 0 and price / close > 2.5:
-                    return round(close, 4)
-                if close > 0 and price / close < 0.4:
-                    return round(close, 4)
-        except Exception:  # noqa: BLE001
-            pass
-    return price
+        if ratio >= 5 or ratio <= 0.2:
+            return round(implied, 4)
+        return round(implied, 4)
+    if price is not None and price > 0:
+        return price
+    return None
 
 
-def _normalize_position(p: dict, db: Session | None = None) -> dict:
+def _normalize_position(p: dict, db: Session | None = None, snap_date: date | None = None) -> dict:
     if not isinstance(p, dict):
         return {}
     code = str(p.get("code") or "").strip()
@@ -83,23 +70,20 @@ def _normalize_position(p: dict, db: Session | None = None) -> dict:
         qty_val = int(float(qty)) if qty is not None else None
     except (TypeError, ValueError):
         qty_val = None
-    price = _parse_money(p.get("price"))
-    market_value = _parse_money(p.get("market_value"))
+    raw_price = _parse_money(p.get("price"))
+    screenshot_mv = _parse_money(p.get("market_value"))
+    price = _price_from_screenshot(raw_price, qty_val, screenshot_mv)
     code, name = market_svc.resolve_stock(
         code, name,
         price=price,
-        market_value=market_value,
+        market_value=screenshot_mv,
         qty=qty_val,
         db=db,
+        snap_date=snap_date,
     )
-    if db is not None:
-        price = _fix_ocr_price(price, qty_val, market_value, code, db)
+    market_value = screenshot_mv
     if market_value is None and qty_val is not None and price is not None:
         market_value = round(qty_val * price, 2)
-    elif qty_val is not None and price is not None:
-        expected = round(qty_val * price, 2)
-        if market_value is None or abs(market_value - expected) / max(market_value, 1) > 0.08:
-            market_value = expected
     clean_code = "".join(ch for ch in (code or "") if ch.isdigit())
     return {
         "code": clean_code.zfill(6) if len(clean_code) == 6 else (code or None),
@@ -267,7 +251,7 @@ async def import_account_screenshot(file: UploadFile = File(...), db: Session = 
     available_cash = _parse_money(parsed.get("available_cash"))
 
     raw_positions = parsed.get("positions") or []
-    positions = [_normalize_position(p, db) for p in raw_positions if isinstance(p, dict)]
+    positions = [_normalize_position(p, db, snap_day) for p in raw_positions if isinstance(p, dict)]
     positions = [p for p in positions if p.get("code") or p.get("name")]
 
     position_value = round(

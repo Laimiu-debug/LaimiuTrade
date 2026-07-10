@@ -199,6 +199,8 @@ _OCR_NAME_TO_CODE: dict[str, str] = {
     "科创板半导体": "588710",
     "科创板半导体etf": "588710",
     "科创板半导体ETF": "588710",
+    "数据ETF": "515400",
+    "数据 ETF": "515400",
 }
 
 # akshare 未加载时的静态名称
@@ -240,11 +242,82 @@ def _implied_price(
     qty: int | None,
     market_value: float | None,
 ) -> float | None:
-    if price is not None and price > 0:
-        return price
     if qty is not None and qty > 0 and market_value is not None and market_value > 0:
         return market_value / qty
+    if price is not None and price > 0:
+        return price
     return None
+
+
+def _close_on_or_before(klines: list[dict], day_str: str | None) -> float | None:
+    if not klines:
+        return None
+    if day_str:
+        valid = [k for k in klines if k["date"] <= day_str]
+        if not valid:
+            return None
+        return float(valid[-1]["close"])
+    return float(klines[-1]["close"])
+
+
+def _quick_name_match(name: str, hits: list[dict[str, str]]) -> tuple[str, str] | None:
+    """恢复快速路径：精确名 / 包含关系 / 唯一命中。"""
+    for hit in hits:
+        if hit["name"] == name:
+            return hit["code"], hit["name"]
+    q = _normalize_query_name(name)
+    for hit in hits:
+        full = _normalize_query_name(hit["name"])
+        if q and len(q) >= 2 and (q in full or full in q):
+            return hit["code"], hit["name"]
+    for hit in hits:
+        if name in hit["name"] or hit["name"] in name:
+            return hit["code"], hit["name"]
+    if len(hits) == 1:
+        return hits[0]["code"], hits[0]["name"]
+    return None
+
+
+def _needs_abbrev_match(name: str, hits: list[dict[str, str]]) -> bool:
+    alias_key = _normalize_query_name(name)
+    if name in _OCR_NAME_TO_CODE or alias_key in _OCR_NAME_TO_CODE:
+        return False
+    if not _etf_like_name(name):
+        return False
+    if not hits:
+        return True
+    q = _normalize_query_name(name)
+    q_core = _strip_etf_suffix(name)
+    for hit in hits[:3]:
+        full = _normalize_query_name(hit["name"])
+        if q and q in full:
+            return False
+        if q_core and len(q_core) >= 2 and q_core in full:
+            return False
+    return True
+
+
+def _abbrev_etf_candidates(name: str) -> list[dict[str, str]]:
+    """仅在简称匹配失败时扫描 ETF 列表（避免每次都全量遍历）。"""
+    seen: set[str] = set()
+    candidates: list[dict[str, str]] = []
+    for hit in search_stocks(name, limit=10):
+        if hit["code"] not in seen:
+            seen.add(hit["code"])
+            candidates.append(hit)
+    q_core = _strip_etf_suffix(name)
+    if len(q_core) > 10:
+        return candidates
+    for item in _load_etf_list():
+        if item["code"] in seen:
+            continue
+        full = _normalize_query_name(item["name"])
+        if _subsequence_match(name, item["name"]) or (
+            len(q_core) >= 2 and q_core in full
+        ):
+            seen.add(item["code"])
+            candidates.append(item)
+    return candidates
 
 
 def _code_name_pair(code: str) -> tuple[str, str] | None:
@@ -289,47 +362,21 @@ def _etf_like_name(name: str) -> bool:
     return any(k in name for k in ("ETF", "etf", "基金", "半导体", "科创", "指数", "LOF", "数据"))
 
 
-def _collect_name_candidates(name: str) -> list[dict[str, str]]:
-    seen: set[str] = set()
-    candidates: list[dict[str, str]] = []
-    for hit in search_stocks(name, limit=15):
-        if hit["code"] not in seen:
-            seen.add(hit["code"])
-            candidates.append(hit)
-    q_core = _strip_etf_suffix(name)
-    if len(q_core) <= 10:
-        for item in _load_etf_list():
-            if item["code"] in seen:
-                continue
-            if _subsequence_match(name, item["name"]) or (
-                len(q_core) >= 2 and q_core in _normalize_query_name(item["name"])
-            ):
-                seen.add(item["code"])
-                candidates.append(item)
-    if len(q_core) <= 6:
-        for item in _load_stock_list():
-            if item["code"] in seen:
-                continue
-            if item["name"] == name or (len(q_core) >= 2 and q_core in item["name"]):
-                seen.add(item["code"])
-                candidates.append(item)
-    return candidates
-
 
 def _disambiguate_by_price(
     candidates: list[dict[str, str]],
     implied: float,
     db: Session,
+    snap_date: date | None = None,
 ) -> dict[str, str] | None:
     best_item: dict[str, str] | None = None
     best_err = float("inf")
+    day_str = snap_date.isoformat() if snap_date else None
     for item in candidates[:12]:
         try:
-            klines = get_daily(db, item["code"], limit=8)["klines"]
-            if not klines:
-                continue
-            close = float(klines[-1]["close"])
-            if close <= 0:
+            klines = get_daily(db, item["code"], limit=90)["klines"]
+            close = _close_on_or_before(klines, day_str)
+            if close is None or close <= 0:
                 continue
             err = abs(close - implied) / implied
             if err < best_err:
@@ -337,7 +384,7 @@ def _disambiguate_by_price(
                 best_item = item
         except Exception:  # noqa: BLE001
             continue
-    if best_item is not None and best_err < 0.25:
+    if best_item is not None and best_err < 0.35:
         return best_item
     return None
 
@@ -350,12 +397,9 @@ def resolve_stock(
     market_value: float | None = None,
     qty: int | None = None,
     db: Session | None = None,
+    snap_date: date | None = None,
 ) -> tuple[str, str]:
-    """从 OCR/手输的代码或名称解析为标准 6 位代码与名称。
-
-    券商截图常只有简称（如「科半导体」），与基金全称不是子串关系；
-    采用子序列匹配 + 行情价格消歧，不确定时留空 code 避免误匹配。
-    """
+    """从 OCR/手输的代码或名称解析为标准 6 位代码与名称。"""
     code = (code or "").strip()
     name = (name or "").strip()
     digits = "".join(ch for ch in code if ch.isdigit())
@@ -374,7 +418,13 @@ def resolve_stock(
                 return pair
 
     if name:
-        candidates = _collect_name_candidates(name)
+        hits = search_stocks(name, limit=10)
+        if not _needs_abbrev_match(name, hits):
+            quick = _quick_name_match(name, hits)
+            if quick:
+                return quick
+
+        candidates = _abbrev_etf_candidates(name)
         ranked = _rank_name_candidates(name, candidates)
         if ranked:
             top_score = ranked[0][0]
@@ -382,21 +432,22 @@ def resolve_stock(
             implied = _implied_price(price, qty, market_value)
 
             if db is not None and implied is not None and len(top_group) > 1:
-                picked = _disambiguate_by_price(top_group, implied, db)
+                picked = _disambiguate_by_price(top_group, implied, db, snap_date)
                 if picked:
                     return picked["code"], picked["name"]
 
             if len(top_group) == 1:
                 return top_group[0]["code"], top_group[0]["name"]
 
-            if len(ranked) >= 2 and ranked[0][0] - ranked[1][0] >= 18:
+            if len(ranked) >= 2 and ranked[0][0] - ranked[1][0] >= 12:
                 return ranked[0][1]["code"], ranked[0][1]["name"]
 
-            if top_score >= 130:
-                return ranked[0][1]["code"], ranked[0]["name"]
+            if top_score >= 95:
+                return ranked[0][1]["code"], ranked[0][1]["name"]
 
-            # 多个候选分数接近：不强行匹配，保留简称供用户手选
-            return "", name
+        quick = _quick_name_match(name, hits)
+        if quick:
+            return quick
 
     if digits:
         hits = search_stocks(digits, limit=3)
