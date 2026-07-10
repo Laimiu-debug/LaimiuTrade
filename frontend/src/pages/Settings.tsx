@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtMoney, today } from '../api';
 import { clearPdfSettingsCache } from '../exportPdf';
 import { Empty, NumberInput, useToast, DateInput, Select } from '../components';
@@ -26,13 +26,15 @@ export default function Settings() {
   const [picking, setPicking] = useState(false);
   const [pdfPickDir, setPdfPickDir] = useState('');
   const [pickingPdf, setPickingPdf] = useState(false);
-  const [testing, setTesting] = useState<'' | 'score' | 'ocr'>('');
+  const [testing, setTesting] = useState<'' | 'score' | 'ocr' | 'market'>('');
+  const [importing, setImporting] = useState(false);
+  const importRef = useRef<HTMLInputElement>(null);
   const [flows, setFlows] = useState<FlowRow[]>([]);
   const [flowForm, setFlowForm] = useState({ flow_date: today(), kind: 'deposit', amount: '', note: '' });
 
   const reloadFlows = useCallback(() => {
-    api.get<FlowRow[]>('/api/capital/flows').then(setFlows).catch(() => {});
-  }, []);
+    api.get<FlowRow[]>('/api/capital/flows').then(setFlows).catch(e => toast(String(e)));
+  }, [toast]);
 
   useEffect(reloadFlows, [reloadFlows]);
 
@@ -69,8 +71,8 @@ export default function Settings() {
       delete v.ai_api_key_set;
       delete v.data_dir;
       setValues(v);
-    }).catch(() => {});
-  }, []);
+    }).catch(e => toast(String(e)));
+  }, [toast]);
 
   const set = (k: string, v: string) => setValues(prev => ({ ...prev, [k]: v }));
 
@@ -135,6 +137,33 @@ export default function Settings() {
       const r = await api.post<{ ok: boolean; message: string }>('/api/settings/test-ai', payload);
       toast(r.message);
     } catch (e) { toast(String(e)); } finally { setTesting(''); }
+  };
+
+  const testMarket = async () => {
+    setTesting('market');
+    try {
+      const r = await api.post<{ ok: boolean; message: string }>('/api/settings/test-market');
+      toast(r.message);
+    } catch (e) { toast(String(e)); } finally { setTesting(''); }
+  };
+
+  const exportBackup = () => {
+    window.open('/api/export/json', '_blank');
+  };
+
+  const importBackup = async (file: File) => {
+    if (!window.confirm('将从备份恢复全量数据并覆盖现有数据，确定继续？')) return;
+    setImporting(true);
+    try {
+      const payload = JSON.parse(await file.text()) as Record<string, unknown>;
+      const r = await api.post<{ ok: boolean; counts: Record<string, number> }>('/api/import/json', { data: payload });
+      const summary = Object.entries(r.counts).map(([k, v]) => `${k} ${v}`).join(' · ');
+      toast(`恢复成功：${summary}`);
+      setTimeout(() => window.location.reload(), 1600);
+    } catch (e) { toast(String(e)); } finally {
+      setImporting(false);
+      if (importRef.current) importRef.current.value = '';
+    }
   };
 
   const addFlow = async () => {
@@ -229,7 +258,12 @@ export default function Settings() {
         </div>
 
         <div className="card">
-          <h3 className="card-title">行情数据源</h3>
+          <h3 className="card-title">
+            <span>行情数据源</span>
+            <button className="ghost no-print" onClick={testMarket} disabled={testing !== ''}>
+              {testing === 'market' ? '测试中…' : '测试连接'}
+            </button>
+          </h3>
           <label className="field"><span>优先级链路（逗号分隔：tdx / akshare / web）</span>
             <input value={values.market_priority ?? ''} onChange={e => set('market_priority', e.target.value)} />
           </label>
@@ -315,6 +349,21 @@ export default function Settings() {
         <div className="muted">
           配置保存路径后，导出将直接写入该目录（需 Windows Edge）。文件名示例：
           <span className="mono">张三 Trading MS 7月10日 复盘日志.pdf</span>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 18 }}>
+        <h3 className="card-title">数据备份与恢复</h3>
+        <div className="muted" style={{ marginBottom: 12 }}>
+          导出 JSON 全量备份（交易、快照、复盘、闪记等）；恢复将覆盖当前全部数据。
+        </div>
+        <div className="row">
+          <button onClick={exportBackup}>导出 JSON 备份</button>
+          <input ref={importRef} type="file" accept="application/json,.json" style={{ display: 'none' }}
+            onChange={e => e.target.files?.[0] && void importBackup(e.target.files[0])} />
+          <button className="primary" onClick={() => importRef.current?.click()} disabled={importing}>
+            {importing ? '恢复中…' : '从 JSON 恢复'}
+          </button>
         </div>
       </div>
 

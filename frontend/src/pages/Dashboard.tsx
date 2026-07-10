@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, fmtMoney, fmtPct, type DayDetail, type FlashCard, type NodeInfo, type Overview } from '../api';
 import { Chart, CHART_COLORS, baseAxis, baseTooltip } from '../Chart';
-import { Empty, SideTag, Stat } from '../components';
+import { Empty, SideTag, Stat, useToast } from '../components';
 
 interface NodesResp {
   state: Overview['state'];
@@ -11,6 +11,7 @@ interface NodesResp {
 }
 
 export default function Dashboard() {
+  const toast = useToast();
   const [overview, setOverview] = useState<Overview | null>(null);
   const [nodes, setNodes] = useState<NodesResp | null>(null);
   const [card, setCard] = useState<FlashCard | null>(null);
@@ -18,17 +19,17 @@ export default function Dashboard() {
   const [dayLoading, setDayLoading] = useState(false);
 
   useEffect(() => {
-    api.get<Overview>('/api/stats/overview').then(setOverview).catch(() => {});
-    api.get<NodesResp>('/api/capital/nodes').then(setNodes).catch(() => {});
-    api.get<FlashCard | null>('/api/cards/random').then(setCard).catch(() => {});
-  }, []);
+    api.get<Overview>('/api/stats/overview').then(setOverview).catch(e => toast(String(e)));
+    api.get<NodesResp>('/api/capital/nodes').then(setNodes).catch(e => toast(String(e)));
+    api.get<FlashCard | null>('/api/cards/random').then(setCard).catch(e => toast(String(e)));
+  }, [toast]);
 
   const openDayDetail = (date: string) => {
     setDayLoading(true);
     setDayDetail(null);
     api.get<DayDetail>(`/api/stats/day/${date}`)
       .then(setDayDetail)
-      .catch(() => setDayDetail(null))
+      .catch(e => { toast(String(e)); setDayDetail(null); })
       .finally(() => setDayLoading(false));
   };
 
@@ -49,8 +50,27 @@ export default function Dashboard() {
       {overview && overview.missing_reviews.length > 0 && (
         <div className="alert" style={{ marginBottom: 18 }}>
           有 {overview.missing_reviews.length} 个交易日未写复盘：
-          {overview.missing_reviews.slice(-5).join('、')}
+          {overview.missing_reviews.slice(-5).map((d, i) => (
+            <span key={d}>
+              {i > 0 ? '、' : ''}
+              <Link to={`/journal?day=${d}`}>{d}</Link>
+            </span>
+          ))}
           {overview.missing_reviews.length > 5 ? ' …' : ''}
+        </div>
+      )}
+
+      {overview && overview.missing_snapshots.length > 0 && (
+        <div className="alert" style={{ marginBottom: 18 }}>
+          有 {overview.missing_snapshots.length} 个交易日缺收盘快照：
+          {overview.missing_snapshots.slice(-5).map((d, i) => (
+            <span key={d}>
+              {i > 0 ? '、' : ''}
+              <Link to="/capital">{d}</Link>
+            </span>
+          ))}
+          {overview.missing_snapshots.length > 5 ? ' …' : ''}
+          <span className="muted">（可在资金账本补录）</span>
         </div>
       )}
 

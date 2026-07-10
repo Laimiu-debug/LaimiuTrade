@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..models import Snapshot, Trade
 from . import market as market_svc
 from . import netvalue
+from . import rounds as rounds_svc
 from . import settings as settings_svc
 
 SCORE_DIMENSIONS = {
@@ -319,11 +320,18 @@ def _review_context(db: Session, review_date: date) -> dict:
             asset_line += f"，较前一交易日 {change:+.2f}%"
     codes = sorted({t.code for t in trades})
     market_text = market_svc.market_context_text(db, codes, review_date)
+    all_rounds = rounds_svc.build_rounds(db)
+    day_rounds = rounds_svc.rounds_touching_day(all_rounds, review_date)
+    round_lines = [
+        rounds_svc.round_line_summary(r, rounds_svc.round_review_meta(db, r)[0])
+        for r in day_rounds
+    ]
     return {
         "trades": trades,
         "trade_lines": trade_lines,
         "asset_line": asset_line,
         "market_text": market_text,
+        "round_lines": round_lines,
     }
 
 
@@ -332,6 +340,7 @@ def generate_daily_review(db: Session, review_date: date, review_texts: dict[str
     review_texts = review_texts or {}
     ctx = _review_context(db, review_date)
     trade_block = "\n".join(t["line"] for t in ctx["trade_lines"]) or "（当日无交易）"
+    round_block = "\n".join(f"- {line}" for line in ctx.get("round_lines") or []) or "（当日无相关回合）"
     prompt = f"""你是一位 A 股波段交易教练。请根据以下客观数据，帮交易者撰写**每日复盘**草稿（中文，具体、可执行，避免空话）。
 
 ## 日期
@@ -345,6 +354,9 @@ def generate_daily_review(db: Session, review_date: date, review_texts: dict[str
 
 ## 当日交易
 {trade_block}
+
+## 相关回合（含本日清仓或本日有成交的标的）
+{round_block}
 
 ## 交易者已写内容（可吸收、补充，勿重复啰嗦）
 盘面观察：{review_texts.get('market_observation') or '（未填写）'}
@@ -371,14 +383,13 @@ def generate_rehearsal_analysis(
     review_date: date,
     rehearsal: list,
     watchlist: list,
-    plans: dict[str, str],
     today_positions: list,
     baseline: dict,
     market_text: str = "",
     review_texts: dict[str, str] | None = None,
     recent_reviews_text: str = "",
 ) -> str:
-    """分析当日填写的次日操作预演与预研计划。"""
+    """分析交易者填写的次日操作预演是否合理。"""
     review_texts = review_texts or {}
     def fmt_positions(items: list) -> str:
         if not items:
@@ -414,45 +425,45 @@ def generate_rehearsal_analysis(
     cash = baseline.get("cash", 0)
     total = baseline.get("total_assets", 0)
 
-    prompt = f"""你是一位 A 股波段交易教练。交易者刚完成 {review_date.isoformat()} 复盘，并填写了**明日操作预演**与**次日预研**。
-请结合**近期大盘/板块走势**与交易者当日复盘，评判预演是否适应当前市场环境。
+    prompt = f"""你是一位 A 股波段交易教练。交易者已完成 {review_date.isoformat()} 复盘，并填写了**明日操作预演**（计划收盘持仓）。
+你的唯一任务：在了解市场环境的前提下，评判这份预演**是否合理、有哪些遗漏、如何改进**。
 
-## 近期大盘与板块行情（客观数据，须优先参考）
+## 分析原则（必须遵守）
+- 交易者提交的所有持仓、价格、资金数据**均视为准确**，不要质疑数据、OCR、录入或小数点。
+- **不要**将预演与「次日预研」文案（大盘预判/仓位计划/风险预案等）做一致性对照；那些多为 AI 复盘草稿，不代表交易者主观定论。
+- **禁止**使用「左右脑互博」「自相矛盾」「预研与预演不符」等措辞；用户要的是对**预演本身**的点评，不是文字对照考试。
+- 资金紧张时，从**交易安排**角度给建议（先卖后买、减仓、留现金等），不要归因于数据错误。
+
+## 近期大盘与板块行情（评判预演的背景）
 {market_text or '（行情数据不可用）'}
 
-## 近几日交易者盘面记录（其主观观察，可交叉验证）
-{recent_reviews_text or '（无近期盘面记录）'}
-
-## 当日复盘摘要
+## 交易者手写复盘（优先参考其主观判断）
 - 盘面观察：{review_texts.get('market_observation') or '（未填写）'}
 - 决策复盘：{review_texts.get('decision_review') or '（未填写）'}
 - 错误教训：{review_texts.get('mistakes') or '（未填写）'}
-- 交易 AI 总评：{review_texts.get('ai_summary') or '（无）'}
+
+## 近几日盘面记录（补充背景）
+{recent_reviews_text or '（无）'}
 
 ## 今日收盘基准
 - 可用现金约 {cash} 元，总资产约 {total} 元
 - 今日实际持仓：
 {today_block}
 
-## 明日操作预演（计划收盘持仓）
+## 明日操作预演（分析核心）
 {rehearsal_block}
 
-## 次日预研（交易者自写预判）
-- 大盘预判：{plans.get('next_market_forecast') or '（未填写）'}
-- 仓位计划：{plans.get('next_position_plan') or '（未填写）'}
-- 风险预案：{plans.get('next_risk_plan') or '（未填写）'}
-
-## 明日观察标的
+## 明日观察标的（执行参考，可与预演仓位交叉审视）
 {watch_block}
 
 ## 输出要求
-请**重新独立分析**，勿沿用任何旧结论。直接输出中文正文（非 JSON），5-8 段，包含：
-1. **市场环境判断**：结合近几日大盘/指数/相关标的走势，当前处于什么阶段（趋势/震荡/退潮），哪些板块相对强/弱
-2. **预演与环境匹配度**：在以上市场背景下，增减仓/新开/清仓是否合理，是否与大盘及板块节奏一致
-3. **资金与仓位**：现金是否充裕、集中度是否过高；若 price×qty 远超总资产，指出现价可能有 OCR 小数点错误
-4. **预研与预演一致性**：交易者的大盘预判、观察标的、预演持仓是否逻辑自洽
-5. **风险与改进**：具体可执行的建议（含若大盘/板块走弱时该如何调整）
-语气直接，禁止空话。"""
+直接输出中文正文（非 JSON），4-6 段，聚焦预演本身：
+1. **市场环境**：简要说明近几日大盘/相关板块所处阶段，作为评判背景（2-3 句即可）
+2. **预演仓位变化**：逐类解读增仓、减仓、新开、清仓的逻辑是否说得通，与当前行情是否匹配
+3. **资金与仓位安排**：现金是否够用、集中度是否过高、买卖顺序是否合理；若紧张，给出可执行的调仓顺序建议
+4. **遗漏与风险**：预演未覆盖的情景（跳空、板块退潮、止损/止盈、单票过重等）
+5. **改进建议**：2-4 条具体、可执行的建议
+语气直接、务实，禁止空话，禁止质疑数据准确性，禁止做预研文案对照。"""
 
     return _chat(db, [{"role": "user", "content": prompt}]).strip()
 

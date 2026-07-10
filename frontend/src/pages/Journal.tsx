@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   api, fmtMoney, today, SCORE_DIMS,
@@ -9,7 +9,25 @@ import {
 import { Empty, NumberInput, SideTag, useToast, DateInput, StockPicker } from '../components';
 import { exportDailyPdf } from '../exportPdf';
 import { fmtCnDate } from '../printCss';
-import { PrintDocHeader } from './periodicShared';
+import { PrintDocHeader, PeriodRounds } from './periodicShared';
+import { useAiBusy } from '../AiBusy';
+import { confirmDiscard, useAutosave, useDirtyGuard } from '../hooks/usePersist';
+
+function journalSaveSnapshot(d: DailyReview): string {
+  return JSON.stringify({
+    market_observation: d.market_observation,
+    decision_review: d.decision_review,
+    mistakes: d.mistakes,
+    scores: d.scores,
+    trade_scores: d.trade_scores ?? {},
+    next_market_forecast: d.next_market_forecast,
+    next_watchlist: d.next_watchlist,
+    next_position_plan: d.next_position_plan,
+    next_risk_plan: d.next_risk_plan,
+    next_position_rehearsal: d.next_position_rehearsal ?? [],
+    rehearsal_ai_analysis: d.rehearsal_ai_analysis ?? '',
+  });
+}
 
 type DayTrade = DailyReview['trades'][number];
 
@@ -454,9 +472,11 @@ function JournalPrintReport({ data, day, username }: { data: DailyReview; day: s
 
 export default function Journal() {
   const toast = useToast();
+  const { setBusy } = useAiBusy();
   const [searchParams] = useSearchParams();
   const [day, setDay] = useState(() => searchParams.get('day') || today());
   const [data, setData] = useState<DailyReview | null>(null);
+  const [savedSnapshot, setSavedSnapshot] = useState('');
   const [scoringId, setScoringId] = useState<number | 'all' | 'batch' | 't-group' | null>(null);
   const [focusedTradeId, setFocusedTradeId] = useState<number | null>(null);
   const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
@@ -471,7 +491,22 @@ export default function Journal() {
   const [exporting, setExporting] = useState(false);
   const [username, setUsername] = useState('');
   const [saving, setSaving] = useState(false);
+  const [autoSavedAt, setAutoSavedAt] = useState<number | null>(null);
   const imgRef = useRef<HTMLInputElement>(null);
+
+  const currentSnapshot = useMemo(
+    () => (data?.review_date === day && data ? journalSaveSnapshot(data) : ''),
+    [data, day],
+  );
+  const dirty = savedSnapshot !== '' && currentSnapshot !== savedSnapshot && !!data;
+  useDirtyGuard(dirty);
+
+  const requestDayChange = (next: string) => {
+    if (next === day) return;
+    if (!confirmDiscard(dirty)) return;
+    setSavedSnapshot('');
+    setDay(next);
+  };
 
   const load = useCallback((d: string): Promise<void> => {
     const seq = ++loadSeqRef.current;
@@ -502,8 +537,11 @@ export default function Journal() {
         prev_rehearsal: res.prev_rehearsal ?? [],
         rehearsal_compare: res.rehearsal_compare ?? [],
         rehearsal_ai_analysis: res.rehearsal_ai_analysis ?? '',
+        day_rounds: res.day_rounds ?? [],
       };
       setData(normalized);
+      setSavedSnapshot(journalSaveSnapshot(normalized));
+      setAutoSavedAt(null);
       const keep = focusAfterLoadRef.current;
       if (keep) {
         if (keep.groupId) {
@@ -527,7 +565,7 @@ export default function Journal() {
 
   useEffect(() => {
     const q = searchParams.get('day');
-    if (q && q !== day) setDay(q);
+    if (q && q !== day) requestDayChange(q);
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -585,6 +623,7 @@ export default function Journal() {
     }
     if (result) {
       applyScoreResult(result);
+      await save(true);
     } else {
       await load(day);
     }
@@ -592,7 +631,7 @@ export default function Journal() {
   };
 
   const save = async (silent = false) => {
-    if (!data) return;
+    if (!data) return false;
     setSaving(true);
     try {
       await api.put(`/api/reviews/daily/${day}`, {
@@ -608,9 +647,18 @@ export default function Journal() {
         next_position_rehearsal: data.next_position_rehearsal ?? [],
         rehearsal_ai_analysis: data.rehearsal_ai_analysis ?? '',
       });
-      if (!silent) toast('复盘已保存');
-    } catch (e) { toast(String(e)); } finally { setSaving(false); }
+      setSavedSnapshot(journalSaveSnapshot(data));
+      if (silent) setAutoSavedAt(Date.now());
+      else toast('复盘已保存');
+      return true;
+    } catch (e) { toast(String(e)); return false; } finally { setSaving(false); }
   };
+
+  useAutosave(
+    !!data && dirty && !saving && scoringId === null && !reviewing && !rehearsalReviewing,
+    async () => { await save(true); },
+    [currentSnapshot],
+  );
 
   const focusTrade = (id: number) => {
     setFocusedTradeId(id);
@@ -640,6 +688,7 @@ export default function Journal() {
     if (scoreLockRef.current) return;
     scoreLockRef.current = true;
     setScoringId('all');
+    setBusy(true, 'AI 交易分析中…');
     try {
       await saveTextsForAi();
       const unscored = data.trades.filter(t => !tradeHasAnalysis(data.trade_scores?.[String(t.id)] ?? {}));
@@ -661,6 +710,7 @@ export default function Journal() {
     } catch (e) { toast(String(e)); } finally {
       scoreLockRef.current = false;
       setScoringId(null);
+      setBusy(false);
     }
   };
 
@@ -669,6 +719,7 @@ export default function Journal() {
     scoreLockRef.current = true;
     setScoringId(tradeId);
     focusTrade(tradeId);
+    setBusy(true, 'AI 分析此笔交易…');
     try {
       await saveTextsForAi();
       const result = await api.post<ScoreApiResult>(`/api/reviews/daily/${day}/ai-score/${tradeId}`);
@@ -680,6 +731,7 @@ export default function Journal() {
     } catch (e) { toast(String(e)); } finally {
       scoreLockRef.current = false;
       setScoringId(null);
+      setBusy(false);
     }
   };
 
@@ -689,6 +741,7 @@ export default function Journal() {
     scoreLockRef.current = true;
     setScoringId('batch');
     focusTrade(selectedTradeIds[0]);
+    setBusy(true, 'AI 批量分析中…');
     try {
       await saveTextsForAi();
       const result = await api.post<ScoreApiResult>(
@@ -707,6 +760,7 @@ export default function Journal() {
     } catch (e) { toast(String(e)); } finally {
       scoreLockRef.current = false;
       setScoringId(null);
+      setBusy(false);
     }
   };
 
@@ -715,6 +769,7 @@ export default function Journal() {
     scoreLockRef.current = true;
     setScoringId('t-group');
     focusGroup(group.id);
+    setBusy(true, 'AI 做T 分析中…');
     try {
       await saveTextsForAi();
       const result = await api.post<ScoreApiResult>(`/api/reviews/daily/${day}/ai-score/t-group`, {
@@ -725,12 +780,14 @@ export default function Journal() {
     } catch (e) { toast(String(e)); } finally {
       scoreLockRef.current = false;
       setScoringId(null);
+      setBusy(false);
     }
   };
 
   const aiReview = async () => {
     await save(true);
     setReviewing(true);
+    setBusy(true, 'AI 复盘生成中…');
     try {
       const result = await api.post<Partial<DailyReview>>(`/api/reviews/daily/${day}/ai-review`);
       patch({
@@ -742,12 +799,16 @@ export default function Journal() {
         next_risk_plan: result.next_risk_plan ?? data?.next_risk_plan ?? '',
       });
       toast('AI 复盘草稿已生成，请核对后保存');
-    } catch (e) { toast(String(e)); } finally { setReviewing(false); }
+    } catch (e) { toast(String(e)); } finally {
+      setReviewing(false);
+      setBusy(false);
+    }
   };
 
   const aiRehearsal = async () => {
     if (!data || !(data.next_position_rehearsal?.length)) { toast('请先填写明日操作预演'); return; }
     setRehearsalReviewing(true);
+    setBusy(true, 'AI 预演分析中…');
     try {
       const result = await api.post<{ rehearsal_ai_analysis: string }>(`/api/reviews/daily/${day}/ai-rehearsal`, {
         next_position_rehearsal: data.next_position_rehearsal ?? [],
@@ -762,7 +823,10 @@ export default function Journal() {
       });
       patch({ rehearsal_ai_analysis: result.rehearsal_ai_analysis ?? '' });
       toast('AI 预演分析已生成');
-    } catch (e) { toast(String(e)); } finally { setRehearsalReviewing(false); }
+    } catch (e) { toast(String(e)); } finally {
+      setRehearsalReviewing(false);
+      setBusy(false);
+    }
   };
 
   const exportPdf = async () => {
@@ -939,7 +1003,12 @@ export default function Journal() {
           <div className="page-sub">复盘是交易者的第二战场</div>
         </div>
         <div className="row">
-          <DateInput value={day} onChange={setDay} style={{ width: 150 }} />
+          <DateInput value={day} onChange={requestDayChange} style={{ width: 150 }} />
+          {(dirty || saving || autoSavedAt) && (
+            <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+              {saving ? '保存中…' : dirty ? '有未保存修改' : `已自动保存 ${new Date(autoSavedAt!).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`}
+            </span>
+          )}
           <button onClick={exportPdf} disabled={exporting || !data}>{exporting ? '导出中…' : '导出 PDF'}</button>
           <button onClick={aiReview} disabled={reviewing}>{reviewing ? 'AI 复盘中…' : '✦ AI 复盘'}</button>
           <button className="primary" onClick={() => save()} disabled={saving}>{saving ? '保存中…' : '保存'}</button>
@@ -1015,6 +1084,19 @@ export default function Journal() {
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {(data.day_rounds?.length ?? 0) > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <PeriodRounds
+                    rounds={data.day_rounds}
+                    title="相关回合"
+                    compact
+                  />
+                  <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                    点击日期可跳转该日复盘 · <Link to="/trades">查看全部回合 →</Link>
+                  </div>
                 </div>
               )}
 

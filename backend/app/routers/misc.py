@@ -16,9 +16,10 @@ from sqlalchemy.orm import Session
 
 from ..database import DATA_DIR, ROOT_DIR, engine, get_db
 from ..models import (
-    CapitalFlow, DailyReview, FlashCard, MonthlyReview, Snapshot, Trade, WeeklyReview,
+    CapitalFlow, DailyReview, FlashCard, MonthlyReview, PendingTrade, Setting, Snapshot, Trade, WeeklyReview,
 )
 from ..services import ai as ai_svc
+from ..services import backup as backup_svc
 from ..services import capital_estimate as capital_est_svc
 from ..services import folder_dialog
 from ..services import market as market_svc
@@ -228,6 +229,49 @@ def test_ai(body: TestAIIn, db: Session = Depends(get_db)):
     return ai_svc.test_connection(base, key, model)
 
 
+@router.post("/settings/test-market")
+def test_market(db: Session = Depends(get_db)):
+    """测试行情源：拉取指数与样本 ETF，返回命中数据源。"""
+    probes = [
+        ("000001.SH", "上证指数"),
+        ("399001.SZ", "深证成指"),
+        ("588710", "科创半导体ETF"),
+    ]
+    lines: list[str] = []
+    ok = False
+    for code, label in probes:
+        result = market_svc.get_daily(db, code, limit=3)
+        klines = result.get("klines") or []
+        source = result.get("source") or "无"
+        if klines:
+            ok = True
+            close = klines[-1]["close"]
+            lines.append(f"{label}({code}): 源={source}，收盘 {close:.4f}")
+        else:
+            errs = result.get("errors") or []
+            lines.append(f"{label}({code}): 失败 — {'; '.join(errs) if errs else '无数据'}")
+    return {
+        "ok": ok,
+        "message": "\n".join(lines),
+    }
+
+
+class ImportJsonIn(BaseModel):
+    data: dict
+
+
+@router.post("/import/json")
+def import_json(body: ImportJsonIn, db: Session = Depends(get_db)):
+    """从 export/json 备份恢复全量数据（覆盖现有数据）。"""
+    try:
+        counts = backup_svc.restore_backup(db, body.data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"恢复失败: {exc}") from exc
+    return {"ok": True, "counts": counts}
+
+
 # ---------- 行情 ----------
 
 @router.get("/market/search/stocks")
@@ -278,6 +322,7 @@ def overview(db: Session = Depends(get_db)):
         "round_stats": rounds_svc.round_stats(rounds),
         "node_timing": netvalue.node_timing(events, start_day),
         "missing_reviews": stats.missing_reviews(db),
+        "missing_snapshots": stats.missing_snapshots(db),
     }
 
 
@@ -381,10 +426,12 @@ def export_json(db: Session = Depends(get_db)):
         "capital_flows": rows(CapitalFlow),
         "snapshots": rows(Snapshot),
         "trades": rows(Trade),
+        "pending_trades": rows(PendingTrade),
         "daily_reviews": rows(DailyReview),
         "weekly_reviews": rows(WeeklyReview),
         "monthly_reviews": rows(MonthlyReview),
         "flash_cards": rows(FlashCard),
+        "settings": rows(Setting),
     }
     return JSONResponse(
         payload,

@@ -1,8 +1,10 @@
 """回合归组：同一标的从建仓（持仓 0 → 正）到清仓（回到 0）为一个回合。"""
 
+from datetime import date
+
 from sqlalchemy.orm import Session
 
-from ..models import Trade
+from ..models import DailyReview, Trade
 
 
 def _trade_dict(t: Trade) -> dict:
@@ -105,3 +107,90 @@ def round_stats(rounds: list[dict]) -> dict:
         "max_lose_streak": lose_streak,
         "total_pnl": round(sum(r["pnl"] for r in closed), 2) if closed else 0.0,
     }
+
+
+def closed_rounds_in_period(rounds: list[dict], start: date, end: date) -> list[dict]:
+    start_s, end_s = start.isoformat(), end.isoformat()
+    return [
+        r for r in rounds
+        if r["status"] == "closed" and r["end_date"] and start_s <= r["end_date"] <= end_s
+    ]
+
+
+def rounds_touching_day(rounds: list[dict], day: date) -> list[dict]:
+    """当日有成交，或当日清仓的回合。"""
+    day_str = day.isoformat()
+    result: list[dict] = []
+    seen: set[str] = set()
+    for r in rounds:
+        key = f"{r['code']}:{r['start_date']}"
+        if key in seen:
+            continue
+        if r.get("end_date") == day_str:
+            result.append(r)
+            seen.add(key)
+            continue
+        for t in r.get("trades") or []:
+            if t.get("date") == day_str:
+                result.append(r)
+                seen.add(key)
+                break
+    return result
+
+
+def round_line_summary(r: dict, review_snippet: str = "") -> str:
+    status = r.get("status")
+    span = f"{r['start_date']}→{r['end_date'] or '持仓中'}"
+    if status == "closed" and r.get("pnl") is not None:
+        line = (
+            f"{r['name']}({r['code']}) {span} "
+            f"盈亏 {r['pnl']}元 ({r.get('pnl_pct')}%)"
+        )
+    elif status == "open":
+        line = f"{r['name']}({r['code']}) {span} 持仓中 {r.get('position', 0)}股"
+    else:
+        line = f"{r['name']}({r['code']}) {span} 异常回合"
+    if review_snippet:
+        line += f" | 复盘摘录: {review_snippet}"
+    return line
+
+
+def round_review_meta(db: Session, r: dict) -> tuple[str, list[str]]:
+    """回合跨度内的每日复盘摘录。"""
+    start = date.fromisoformat(r["start_date"])
+    if r.get("end_date"):
+        end = date.fromisoformat(r["end_date"])
+    else:
+        trade_dates = [
+            date.fromisoformat(t["date"])
+            for t in (r.get("trades") or [])
+            if t.get("date")
+        ]
+        end = max(trade_dates) if trade_dates else start
+    rows = (
+        db.query(DailyReview)
+        .filter(DailyReview.review_date >= start, DailyReview.review_date <= end)
+        .order_by(DailyReview.review_date)
+        .all()
+    )
+    review_dates: list[str] = []
+    parts: list[str] = []
+    for row in rows:
+        has_content = any([
+            (row.market_observation or "").strip(),
+            (row.decision_review or "").strip(),
+            (row.mistakes or "").strip(),
+            (row.ai_summary or "").strip(),
+        ])
+        if not has_content:
+            continue
+        review_dates.append(row.review_date.isoformat())
+        if (row.mistakes or "").strip():
+            parts.append(f"{row.review_date} 教训:{row.mistakes.strip()[:80]}")
+        elif (row.decision_review or "").strip():
+            parts.append(f"{row.review_date} 决策:{row.decision_review.strip()[:80]}")
+        elif (row.ai_summary or "").strip():
+            parts.append(f"{row.review_date} 总评:{row.ai_summary.strip()[:80]}")
+        elif (row.market_observation or "").strip():
+            parts.append(f"{row.review_date} 观察:{row.market_observation.strip()[:80]}")
+    return " | ".join(parts[:2]), review_dates

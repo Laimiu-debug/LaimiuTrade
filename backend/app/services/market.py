@@ -590,4 +590,29 @@ def rehearsal_market_context(db: Session, day: date, codes: list[str], lookback:
     if stock_lines:
         sections.append("【预演/持仓相关标的走势】\n" + "\n".join(stock_lines))
 
+    sector_targets = [
+        ("512480", "半导体ETF"),
+        ("512880", "证券ETF"),
+        ("515400", "大数据ETF"),
+        ("512760", "芯片ETF"),
+        ("512660", "军工ETF"),
+        ("512010", "医药ETF"),
+        ("512170", "医疗ETF"),
+        ("159915", "创业板ETF"),
+        ("510300", "沪深300ETF"),
+        ("512800", "银行ETF"),
+        ("515790", "光伏ETF"),
+    ]
+    sector_lines: list[str] = []
+    for code, label in sector_targets:
+        klines = [k for k in get_daily(db, code, limit=lookback + 5)["klines"] if k["date"] <= day_str][-lookback:]
+        if len(klines) < 2:
+            continue
+        first_close = klines[0]["close"]
+        last_close = klines[-1]["close"]
+        period_chg = ((last_close / first_close) - 1) * 100 if first_close else 0.0
+        sector_lines.append(f"- {label}({code}): 近{len(klines)}日 {period_chg:+.2f}%，收 {last_close:.3f}")
+    if sector_lines:
+        sections.append("【主要板块 ETF 近{}日表现】\n".format(lookback) + "\n".join(sector_lines))
+
     return "\n\n".join(sections) if sections else "（行情数据不可用）"

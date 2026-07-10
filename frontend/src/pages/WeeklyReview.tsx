@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { api } from '../api';
 import { exportWeeklyPdf } from '../exportPdf';
 import { useToast } from '../components';
+import { useAiBusy } from '../AiBusy';
+import { confirmDiscard, useAutosave, useDirtyGuard } from '../hooks/usePersist';
 import {
-  AutoStats, PeriodicField, WeeklyPrintBody, isoWeek, type PeriodAuto,
+  AutoStats, PeriodicField, PeriodRounds, WeeklyPrintBody, isoWeek, type PeriodAuto,
 } from './periodicShared';
+import type { LinkedRoundRow } from '../api';
 
 interface WeeklyData {
   year: number;
@@ -15,34 +18,65 @@ interface WeeklyData {
   market_review: string;
   next_strategy: string;
   auto: PeriodAuto;
+  period_rounds: LinkedRoundRow[];
+}
+
+function weeklySaveSnapshot(w: Pick<WeeklyData, 'right_things' | 'wrong_things' | 'market_review' | 'next_strategy'>): string {
+  return JSON.stringify({
+    right_things: w.right_things,
+    wrong_things: w.wrong_things,
+    market_review: w.market_review,
+    next_strategy: w.next_strategy,
+  });
 }
 
 export default function WeeklyReview() {
   const toast = useToast();
+  const { setBusy } = useAiBusy();
   const now = new Date();
   const [defYear, defWeek] = isoWeek(now);
   const [wk, setWk] = useState({ year: defYear, week: defWeek });
   const [weekly, setWeekly] = useState<WeeklyData | null>(null);
+  const [savedSnapshot, setSavedSnapshot] = useState('');
   const [username, setUsername] = useState('');
   const [reviewing, setReviewing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [autoSavedAt, setAutoSavedAt] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
 
+  const currentSnapshot = useMemo(
+    () => (weekly ? weeklySaveSnapshot(weekly) : ''),
+    [weekly],
+  );
+  const dirty = savedSnapshot !== '' && currentSnapshot !== savedSnapshot && !!weekly;
+  useDirtyGuard(dirty);
+
   useEffect(() => {
-    api.get<{ pdf_username?: string }>('/api/settings').then(v => setUsername(v.pdf_username ?? '')).catch(() => {});
-  }, []);
+    api.get<{ pdf_username?: string }>('/api/settings').then(v => setUsername(v.pdf_username ?? '')).catch(e => toast(String(e)));
+  }, [toast]);
 
   const loadWeekly = useCallback(() => {
-    api.get<WeeklyData>(`/api/reviews/weekly/${wk.year}/${wk.week}`).then(setWeekly).catch(e => toast(String(e)));
+    api.get<WeeklyData>(`/api/reviews/weekly/${wk.year}/${wk.week}`).then(res => {
+      setWeekly({ ...res, period_rounds: res.period_rounds ?? [] });
+      setSavedSnapshot(weeklySaveSnapshot(res));
+      setAutoSavedAt(null);
+    }).catch(e => toast(String(e)));
   }, [wk, toast]);
 
   useEffect(loadWeekly, [loadWeekly]);
+
+  const requestWeekChange = (next: { year: number; week: number }) => {
+    if (next.year === wk.year && next.week === wk.week) return;
+    if (!confirmDiscard(dirty)) return;
+    setSavedSnapshot('');
+    setWk(next);
+  };
 
   const shiftWeek = (delta: number) => {
     const monday = new Date(Date.UTC(wk.year, 0, 4));
     monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() || 7) + 1 + (wk.week - 1 + delta) * 7);
     const [y, w] = isoWeek(new Date(monday.getUTCFullYear(), monday.getUTCMonth(), monday.getUTCDate()));
-    setWk({ year: y, week: w });
+    requestWeekChange({ year: y, week: w });
   };
 
   const save = async (silent = false) => {
@@ -55,13 +89,22 @@ export default function WeeklyReview() {
         market_review: weekly.market_review,
         next_strategy: weekly.next_strategy,
       });
-      if (!silent) toast('周复盘已保存');
+      setSavedSnapshot(weeklySaveSnapshot(weekly));
+      if (silent) setAutoSavedAt(Date.now());
+      else toast('周复盘已保存');
     } catch (e) { toast(String(e)); } finally { setSaving(false); }
   };
+
+  useAutosave(
+    !!weekly && dirty && !saving && !reviewing,
+    async () => { await save(true); },
+    [currentSnapshot],
+  );
 
   const aiReview = async () => {
     await save(true);
     setReviewing(true);
+    setBusy(true, 'AI 周复盘生成中…');
     try {
       const result = await api.post<Partial<WeeklyData>>(`/api/reviews/weekly/${wk.year}/${wk.week}/ai-review`);
       setWeekly(prev => prev ? {
@@ -72,7 +115,10 @@ export default function WeeklyReview() {
         next_strategy: result.next_strategy ?? prev.next_strategy,
       } : prev);
       toast('AI 周复盘草稿已生成，请核对后保存');
-    } catch (e) { toast(String(e)); } finally { setReviewing(false); }
+    } catch (e) { toast(String(e)); } finally {
+      setReviewing(false);
+      setBusy(false);
+    }
   };
 
   const exportPdf = async () => {
@@ -91,6 +137,7 @@ export default function WeeklyReview() {
           right_things={weekly.right_things}
           wrong_things={weekly.wrong_things}
           next_strategy={weekly.next_strategy}
+          period_rounds={weekly.period_rounds}
         />,
       );
       await exportWeeklyPdf(
@@ -111,6 +158,11 @@ export default function WeeklyReview() {
           <div className="page-sub">拉远镜头，检视一周节奏与纪律</div>
         </div>
         <div className="row">
+          {(dirty || saving || autoSavedAt) && (
+            <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+              {saving ? '保存中…' : dirty ? '有未保存修改' : `已自动保存 ${new Date(autoSavedAt!).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`}
+            </span>
+          )}
           <button onClick={exportPdf} disabled={exporting || !weekly}>{exporting ? '导出中…' : '导出 PDF'}</button>
           <button onClick={aiReview} disabled={reviewing}>{reviewing ? 'AI 复盘中…' : '✦ AI 复盘'}</button>
           <button className="primary" onClick={() => save()} disabled={saving}>{saving ? '保存中…' : '保存'}</button>
@@ -134,6 +186,11 @@ export default function WeeklyReview() {
             <div className="no-print">
               <AutoStats auto={weekly.auto} />
             </div>
+            {weekly.period_rounds.length > 0 && (
+              <div className="card no-print" style={{ marginBottom: 16 }}>
+                <PeriodRounds rounds={weekly.period_rounds} title="本周清仓回合" />
+              </div>
+            )}
             <div className="periodic-grid periodic-grid-4 no-print">
               <PeriodicField label="本周盘面回顾" value={weekly.market_review}
                 onChange={v => setWeekly({ ...weekly, market_review: v })}

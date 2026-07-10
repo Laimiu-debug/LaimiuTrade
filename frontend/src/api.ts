@@ -85,6 +85,26 @@ export interface RoundRow {
   trades: { id: number; date: string; side: string; price: number; qty: number; fees: number }[];
 }
 
+/** 回合与复盘串联摘要（日/周/月 API 返回） */
+export interface LinkedRoundRow {
+  code: string;
+  name: string;
+  start_date: string;
+  end_date: string | null;
+  status: 'closed' | 'open' | 'anomaly';
+  position?: number | null;
+  pnl: number | null;
+  pnl_pct: number | null;
+  buy_amount: number;
+  sell_amount?: number;
+  fees?: number;
+  trade_count: number;
+  review_snippet: string;
+  review_dates: string[];
+  has_trade_today?: boolean;
+  closed_today?: boolean;
+}
+
 export interface RoundStats {
   total_rounds: number;
   open_rounds: number;
@@ -199,6 +219,7 @@ export interface DailyReview {
   trades: { id: number; code: string; name: string; side: string; price: number; qty: number; fees: number }[];
   t_groups: TGroup[];
   snapshot: SnapshotInfo | null;
+  day_rounds: LinkedRoundRow[];
 }
 
 export interface FlashCard {
@@ -230,6 +251,7 @@ export interface Overview {
   round_stats: RoundStats;
   node_timing: NodeTiming[];
   missing_reviews: string[];
+  missing_snapshots: string[];
 }
 
 export const SCORE_DIMS: Record<string, string> = {

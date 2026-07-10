@@ -953,6 +953,47 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
 .snap-card-meta {
   display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 12px;
 }
+.trade-group-list { display: flex; flex-direction: column; gap: 12px; }
+.trade-group-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.trade-group-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.trade-group-title { font-size: 15px; font-weight: 600; }
+.trade-group-title a { color: inherit; text-decoration: none; }
+.trade-group-title a:hover { color: var(--gold); }
+.trade-group-meta { font-size: 12px; margin-top: 4px; }
+.trade-group-body { display: flex; flex-direction: column; }
+.trade-group-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.trade-group-row:first-child { border-top: none; }
+.trade-group-row-date { flex: 0 0 92px; font-size: 12px; }
+.trade-group-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 160px;
+  flex-wrap: wrap;
+}
+.trade-group-row-name { font-weight: 500; }
+.trade-group-row-amount { margin-left: auto; font-size: 13px; }
+.trade-group-row-fees { font-size: 12px; min-width: 56px; text-align: right; }
 .snap-card-positions {
   margin-top: 10px;
   padding-top: 10px;
@@ -1143,6 +1184,30 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
 }
 @keyframes quit-spin { to { transform: rotate(360deg); } }
 
+.ai-busy-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(245, 240, 230, 0.72);
+  backdrop-filter: blur(2px);
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+:root[data-theme="dark"] .ai-busy-overlay { background: rgba(8, 9, 13, 0.72); }
+.ai-busy-card {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 32px 44px;
+  text-align: center;
+  box-shadow: var(--shadow-md);
+}
+.ai-busy-text { font-size: 16px; color: var(--text); margin-top: 14px; }
+.ai-busy-sub { font-size: 12px; color: var(--text-3); margin-top: 8px; }
+.save-status { font-size: 12px; color: var(--text-3); margin-left: 8px; }
+.save-status.dirty { color: var(--gold); }
+
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .spacer { flex: 1; }
 .muted { color: var(--text-3); font-size: 12px; }
@@ -1151,6 +1216,19 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
 .img-thumb { width: 130px; height: 90px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--border); cursor: pointer; }
 
 /* ============ 周/月复盘全页布局 ============ */
+.period-rounds { margin-bottom: 4px; }
+.period-rounds-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.period-rounds.compact table { font-size: 12px; }
+.period-rounds.compact th,
+.period-rounds.compact td { padding: 6px 8px; }
+
 .periodic-page {
   display: flex;
   flex-direction: column;

@@ -165,9 +165,18 @@ def delete_flow(flow_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/snapshots")
-def list_snapshots(db: Session = Depends(get_db)):
-    rows = db.query(Snapshot).order_by(Snapshot.snap_date.desc()).all()
-    return [_snapshot_dict(r) for r in rows]
+def list_snapshots(offset: int = 0, limit: int = 20, db: Session = Depends(get_db)):
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    q = db.query(Snapshot).order_by(Snapshot.snap_date.desc())
+    total = q.count()
+    rows = q.offset(offset).limit(limit).all()
+    return {
+        "items": [_snapshot_dict(r) for r in rows],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+    }
 
 
 @router.post("/snapshots")

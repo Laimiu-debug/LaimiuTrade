@@ -68,3 +68,10 @@ def missing_reviews(db: Session) -> list[str]:
         active_days.add(d)
     reviewed = {d for (d,) in db.query(DailyReview.review_date).distinct()}
     return sorted(d.isoformat() for d in active_days - reviewed)
+
+
+def missing_snapshots(db: Session) -> list[str]:
+    """有交易记录、但没有资金快照的日期（影响净值曲线）。"""
+    trade_days = {d for (d,) in db.query(Trade.trade_date).distinct()}
+    snap_days = {d for (d,) in db.query(Snapshot.snap_date).distinct()}
+    return sorted(d.isoformat() for d in trade_days - snap_days)

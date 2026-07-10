@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, fmtMoney, fmtPct, today, type RoundRow, type RoundStats, type TradeRow } from '../api';
 import { Empty, SideTag, Stat, useToast, DateInput, NumberInput, StockPicker, Select } from '../components';
 
@@ -25,9 +26,124 @@ interface SnapshotSuggestion {
   message?: string;
 }
 
+type ListMode = 'day' | 'stock';
+
+interface DayTradeGroup {
+  date: string;
+  trades: TradeRow[];
+  buyCount: number;
+  sellCount: number;
+  buyAmount: number;
+  sellAmount: number;
+}
+
+interface StockTradeGroup {
+  code: string;
+  name: string;
+  trades: TradeRow[];
+  buyQty: number;
+  sellQty: number;
+  firstDate: string;
+  lastDate: string;
+}
+
+function groupTradesByDay(trades: TradeRow[]): DayTradeGroup[] {
+  const map = new Map<string, TradeRow[]>();
+  for (const t of trades) {
+    const list = map.get(t.trade_date) ?? [];
+    list.push(t);
+    map.set(t.trade_date, list);
+  }
+  return [...map.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([date, items]) => {
+      const sorted = [...items].sort((a, b) => a.id - b.id);
+      let buyCount = 0;
+      let sellCount = 0;
+      let buyAmount = 0;
+      let sellAmount = 0;
+      for (const t of sorted) {
+        if (t.side === 'buy') {
+          buyCount += 1;
+          buyAmount += t.amount;
+        } else {
+          sellCount += 1;
+          sellAmount += t.amount;
+        }
+      }
+      return { date, trades: sorted, buyCount, sellCount, buyAmount, sellAmount };
+    });
+}
+
+function groupTradesByStock(trades: TradeRow[]): StockTradeGroup[] {
+  const map = new Map<string, StockTradeGroup>();
+  for (const t of trades) {
+    const existing = map.get(t.code);
+    if (existing) {
+      existing.trades.push(t);
+      if (!existing.name && t.name) existing.name = t.name;
+    } else {
+      map.set(t.code, { code: t.code, name: t.name, trades: [t], buyQty: 0, sellQty: 0, firstDate: t.trade_date, lastDate: t.trade_date });
+    }
+  }
+  return [...map.values()]
+    .map(group => {
+      const sorted = [...group.trades].sort((a, b) => {
+        const byDate = a.trade_date.localeCompare(b.trade_date);
+        return byDate !== 0 ? byDate : a.id - b.id;
+      });
+      let buyQty = 0;
+      let sellQty = 0;
+      for (const t of sorted) {
+        if (t.side === 'buy') buyQty += t.qty;
+        else sellQty += t.qty;
+      }
+      return {
+        ...group,
+        trades: sorted,
+        buyQty,
+        sellQty,
+        firstDate: sorted[0]?.trade_date ?? '',
+        lastDate: sorted[sorted.length - 1]?.trade_date ?? '',
+      };
+    })
+    .sort((a, b) => b.lastDate.localeCompare(a.lastDate) || a.code.localeCompare(b.code));
+}
+
+function TradeLine({
+  trade,
+  showDate,
+  onDelete,
+}: {
+  trade: TradeRow;
+  showDate?: boolean;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="trade-group-row">
+      {showDate && <span className="trade-group-row-date mono muted">{trade.trade_date}</span>}
+      <SideTag side={trade.side} />
+      <span className="trade-group-row-main">
+        {!showDate && (
+          <>
+            <span className="trade-group-row-name">{trade.name}</span>
+            <span className="muted mono">{trade.code}</span>
+          </>
+        )}
+        <span className="mono muted">{trade.price.toFixed(3)} × {trade.qty}</span>
+        {trade.source === 'import' && <span className="tag" style={{ fontSize: 10 }}>导入</span>}
+      </span>
+      <span className="trade-group-row-amount mono">¥{fmtMoney(trade.amount)}</span>
+      <span className="trade-group-row-fees mono muted">费 {trade.fees.toFixed(2)}</span>
+      <button className="danger-ghost" onClick={onDelete}>删除</button>
+    </div>
+  );
+}
+
 export default function Trades() {
   const toast = useToast();
   const [tab, setTab] = useState<'list' | 'rounds'>('list');
+  const [listMode, setListMode] = useState<ListMode>('day');
   const [trades, setTrades] = useState<TradeRow[]>([]);
   const [rounds, setRounds] = useState<{ rounds: RoundRow[]; stats: RoundStats } | null>(null);
   const [pending, setPending] = useState<PendingRow[]>([]);
@@ -42,12 +158,22 @@ export default function Trades() {
   });
 
   const reload = useCallback(() => {
-    api.get<TradeRow[]>('/api/trades').then(setTrades).catch(() => {});
-    api.get<{ rounds: RoundRow[]; stats: RoundStats }>('/api/trades/rounds').then(setRounds).catch(() => {});
-    api.get<PendingRow[]>('/api/trades/pending').then(setPending).catch(() => {});
-  }, []);
+    api.get<TradeRow[]>('/api/trades').then(setTrades).catch(e => toast(String(e)));
+    api.get<{ rounds: RoundRow[]; stats: RoundStats }>('/api/trades/rounds').then(setRounds).catch(e => toast(String(e)));
+    api.get<PendingRow[]>('/api/trades/pending').then(setPending).catch(e => toast(String(e)));
+  }, [toast]);
 
   useEffect(reload, [reload]);
+
+  const dayGroups = useMemo(() => groupTradesByDay(trades), [trades]);
+  const stockGroups = useMemo(() => groupTradesByStock(trades), [trades]);
+
+  const deleteTrade = async (id: number) => {
+    try {
+      await api.del(`/api/trades/${id}`);
+      reload();
+    } catch (e) { toast(String(e)); }
+  };
 
   const getPendingEdit = (p: PendingRow): PendingEdit =>
     pendingEdits[p.id] ?? {
@@ -343,9 +469,15 @@ export default function Trades() {
         </div>
       </div>
 
-      <div className="row" style={{ marginBottom: 14 }}>
+      <div className="row" style={{ marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
         <button className={tab === 'list' ? 'primary' : ''} onClick={() => setTab('list')}>流水</button>
         <button className={tab === 'rounds' ? 'primary' : ''} onClick={() => setTab('rounds')}>回合</button>
+        {tab === 'list' && trades.length > 0 && (
+          <span className="row" style={{ marginLeft: 4, gap: 6 }}>
+            <button className={listMode === 'day' ? 'primary' : 'ghost'} onClick={() => setListMode('day')}>按日</button>
+            <button className={listMode === 'stock' ? 'primary' : 'ghost'} onClick={() => setListMode('stock')}>按标的</button>
+          </span>
+        )}
         {rounds && rounds.stats.total_rounds > 0 && (
           <span className="muted" style={{ marginLeft: 8 }}>
             已完成 {rounds.stats.total_rounds} 回合 · 胜率 {rounds.stats.win_rate ?? '—'}% · 盈亏比 {rounds.stats.profit_loss_ratio ?? '—'}
@@ -355,26 +487,55 @@ export default function Trades() {
 
       {tab === 'list' && (
         <div className="card">
-          {trades.length === 0 ? <Empty text="暂无交易记录" /> : (
-            <table>
-              <thead><tr><th>日期</th><th>标的</th><th>方向</th><th style={{ textAlign: 'right' }}>价格</th><th style={{ textAlign: 'right' }}>数量</th><th style={{ textAlign: 'right' }}>金额</th><th style={{ textAlign: 'right' }}>费用</th><th /></tr></thead>
-              <tbody>
-                {trades.map(t => (
-                  <tr key={t.id}>
-                    <td>{t.trade_date}</td>
-                    <td>{t.name} <span className="muted mono">{t.code}</span>{t.source === 'import' && <span className="tag" style={{ marginLeft: 4 }}>导入</span>}</td>
-                    <td><SideTag side={t.side} /></td>
-                    <td style={{ textAlign: 'right' }} className="mono">{t.price.toFixed(3)}</td>
-                    <td style={{ textAlign: 'right' }} className="mono">{t.qty}</td>
-                    <td style={{ textAlign: 'right' }} className="mono">¥{fmtMoney(t.amount)}</td>
-                    <td style={{ textAlign: 'right' }} className="mono muted">{t.fees.toFixed(2)}</td>
-                    <td style={{ textAlign: 'right' }}>
-                      <button className="danger-ghost" onClick={async () => { await api.del(`/api/trades/${t.id}`); reload(); }}>删除</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {trades.length === 0 ? <Empty text="暂无交易记录" /> : listMode === 'day' ? (
+            <div className="trade-group-list">
+              {dayGroups.map(group => (
+                <div className="trade-group-card" key={group.date}>
+                  <div className="trade-group-head">
+                    <div>
+                      <div className="trade-group-title">
+                        <Link to={`/journal?day=${group.date}`}>{group.date}</Link>
+                      </div>
+                      <div className="trade-group-meta muted">
+                        {group.trades.length} 笔
+                        {group.buyCount > 0 && <span> · 买 {group.buyCount} 笔 ¥{fmtMoney(group.buyAmount)}</span>}
+                        {group.sellCount > 0 && <span> · 卖 {group.sellCount} 笔 ¥{fmtMoney(group.sellAmount)}</span>}
+                      </div>
+                    </div>
+                    <Link className="ghost" style={{ fontSize: 12 }} to={`/journal?day=${group.date}`}>查看复盘 →</Link>
+                  </div>
+                  <div className="trade-group-body">
+                    {group.trades.map(t => (
+                      <TradeLine key={t.id} trade={t} onDelete={() => void deleteTrade(t.id)} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="trade-group-list">
+              {stockGroups.map(group => (
+                <div className="trade-group-card" key={group.code}>
+                  <div className="trade-group-head">
+                    <div>
+                      <div className="trade-group-title">
+                        {group.name} <span className="muted mono">{group.code}</span>
+                      </div>
+                      <div className="trade-group-meta muted">
+                        {group.trades.length} 笔 · {group.firstDate} ~ {group.lastDate}
+                        {group.buyQty > 0 && <span> · 累计买 {group.buyQty} 股</span>}
+                        {group.sellQty > 0 && <span> · 累计卖 {group.sellQty} 股</span>}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="trade-group-body">
+                    {group.trades.map(t => (
+                      <TradeLine key={t.id} trade={t} showDate onDelete={() => void deleteTrade(t.id)} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -397,7 +558,13 @@ export default function Trades() {
                   {rounds.rounds.map((r, i) => (
                     <tr key={i}>
                       <td>{r.name} <span className="muted mono">{r.code}</span></td>
-                      <td className="muted">{r.start_date} → {r.end_date ?? '持仓中'}</td>
+                      <td className="muted">
+                        <Link to={`/journal?day=${r.start_date}`}>{r.start_date}</Link>
+                        {' → '}
+                        {r.end_date
+                          ? <Link to={`/journal?day=${r.end_date}`}>{r.end_date}</Link>
+                          : '持仓中'}
+                      </td>
                       <td>{r.status === 'closed' ? <span className="tag">已清仓</span> : r.status === 'open' ? <span className="tag gold">持仓 {r.position}股</span> : <span className="tag sell">异常</span>}</td>
                       <td style={{ textAlign: 'right' }} className="mono">¥{fmtMoney(r.buy_amount)}</td>
                       <td style={{ textAlign: 'right' }} className={`mono ${r.pnl != null ? (r.pnl >= 0 ? 'pos' : 'neg') : ''}`}>{r.pnl != null ? `¥${fmtMoney(r.pnl)}` : '—'}</td>

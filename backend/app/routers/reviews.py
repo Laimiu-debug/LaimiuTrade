@@ -587,6 +587,7 @@ def get_daily(day: date, db: Session = Depends(get_db)):
             prev_rehearsal = []
     data["prev_rehearsal"] = prev_rehearsal
     data["rehearsal_compare"] = _compare_rehearsal(prev_rehearsal, data["today_positions"]) if prev_rehearsal else []
+    data["day_rounds"] = _day_rounds_payload(db, day)
     return data
 
 
@@ -832,7 +833,6 @@ def ai_rehearsal_review(day: date, body: RehearsalAiIn | None = None, db: Sessio
     try:
         analysis = ai_svc.generate_rehearsal_analysis(
             db, day, rehearsal, watchlist,
-            plans,
             today_positions,
             baseline,
             market_text=market_text,
@@ -868,6 +868,56 @@ def missing(db: Session = Depends(get_db)):
 def _week_range(year: int, week: int) -> tuple[date, date]:
     start = date.fromisocalendar(year, week, 1)
     return start, start + timedelta(days=6)
+
+
+def _round_review_meta(db: Session, r: dict) -> tuple[str, list[str]]:
+    return rounds_svc.round_review_meta(db, r)
+
+
+def _round_payload(db: Session, r: dict, *, day: date | None = None) -> dict:
+    excerpt, review_dates = _round_review_meta(db, r)
+    payload = {
+        "code": r["code"],
+        "name": r["name"],
+        "start_date": r["start_date"],
+        "end_date": r["end_date"],
+        "status": r["status"],
+        "position": r.get("position"),
+        "pnl": r.get("pnl"),
+        "pnl_pct": r.get("pnl_pct"),
+        "buy_amount": r.get("buy_amount"),
+        "sell_amount": r.get("sell_amount"),
+        "fees": r.get("fees"),
+        "trade_count": len(r.get("trades") or []),
+        "review_snippet": excerpt,
+        "review_dates": review_dates,
+    }
+    if day is not None:
+        day_str = day.isoformat()
+        payload["has_trade_today"] = any(
+            t.get("date") == day_str for t in (r.get("trades") or [])
+        )
+        payload["closed_today"] = r.get("end_date") == day_str and r.get("status") == "closed"
+    return payload
+
+
+def _period_rounds_payload(db: Session, start: date, end: date) -> list[dict]:
+    all_rounds = rounds_svc.build_rounds(db)
+    closed = rounds_svc.closed_rounds_in_period(all_rounds, start, end)
+    closed.sort(key=lambda r: r.get("end_date") or "", reverse=True)
+    return [_round_payload(db, r) for r in closed]
+
+
+def _day_rounds_payload(db: Session, day: date) -> list[dict]:
+    all_rounds = rounds_svc.build_rounds(db)
+    touching = rounds_svc.rounds_touching_day(all_rounds, day)
+    touching.sort(
+        key=lambda r: (
+            0 if r.get("end_date") == day.isoformat() and r.get("status") == "closed" else 1,
+            r.get("start_date") or "",
+        ),
+    )
+    return [_round_payload(db, r, day=day) for r in touching]
 
 
 def _period_auto(db: Session, start: date, end: date) -> dict:
@@ -956,8 +1006,7 @@ def _build_period_context(db: Session, start: date, end: date) -> dict:
         if r["status"] == "closed" and r["end_date"] and start.isoformat() <= r["end_date"] <= end.isoformat()
     ]
     round_lines = [
-        f"{r['name']}({r['code']}) {r['start_date']}→{r['end_date']} "
-        f"盈亏 {r['pnl']}元 ({r['pnl_pct']}%)"
+        rounds_svc.round_line_summary(r, _round_review_meta(db, r)[0])
         for r in closed_in
     ]
 
@@ -991,6 +1040,7 @@ def get_weekly(year: int, week: int, db: Session = Depends(get_db)):
         "market_review": row.market_review if row else "",
         "next_strategy": row.next_strategy if row else "",
         "auto": _period_auto(db, start, end),
+        "period_rounds": _period_rounds_payload(db, start, end),
     }
 
 
@@ -1066,6 +1116,7 @@ def get_monthly(year: int, month: int, db: Session = Depends(get_db)):
             "node_count": state["node_count"],
             "nav": state["nav"],
         },
+        "period_rounds": _period_rounds_payload(db, start, end),
     }
 
 

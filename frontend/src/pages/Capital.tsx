@@ -15,6 +15,12 @@ interface SnapRow {
   positions: SnapPosition[];
   note: string;
 }
+interface SnapshotsPage {
+  items: SnapRow[];
+  total: number;
+  offset: number;
+  limit: number;
+}
 interface AccountImportPreview {
   snap_date: string;
   total_assets: number | null;
@@ -82,9 +88,13 @@ async function fetchCloseOnDay(code: string, day: string): Promise<number | null
   }
 }
 
+const PAGE_SIZE = 20;
+
 export default function Capital() {
   const toast = useToast();
   const [snaps, setSnaps] = useState<SnapRow[]>([]);
+  const [snapTotal, setSnapTotal] = useState(0);
+  const [snapOffset, setSnapOffset] = useState(0);
   const [hasInitial, setHasInitial] = useState(true);
   const [estimating, setEstimating] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -97,9 +107,18 @@ export default function Capital() {
   const [expandedSnapId, setExpandedSnapId] = useState<number | null>(null);
 
   const reload = useCallback(() => {
-    api.get<SnapRow[]>('/api/capital/snapshots').then(setSnaps).catch(() => {});
-    api.get<{ has_initial: boolean }>('/api/capital/status').then(r => setHasInitial(r.has_initial)).catch(() => {});
-  }, []);
+    api.get<SnapshotsPage>(`/api/capital/snapshots?offset=${snapOffset}&limit=${PAGE_SIZE}`)
+      .then(r => {
+        if (r.items.length === 0 && r.offset > 0) {
+          setSnapOffset(Math.max(0, r.offset - PAGE_SIZE));
+          return;
+        }
+        setSnaps(r.items);
+        setSnapTotal(r.total);
+      })
+      .catch(e => toast(String(e)));
+    api.get<{ has_initial: boolean }>('/api/capital/status').then(r => setHasInitial(r.has_initial)).catch(e => toast(String(e)));
+  }, [snapOffset, toast]);
 
   useEffect(reload, [reload]);
 
@@ -168,6 +187,7 @@ export default function Capital() {
       return;
     }
     try {
+      const wasEdit = editingSnapId != null;
       const preview = importPreview ? recalcPreview(importPreview) : null;
       await api.post('/api/capital/snapshots', {
         snap_date: snapForm.snap_date,
@@ -180,8 +200,9 @@ export default function Capital() {
       setSnapForm({ ...snapForm, total_assets: '', note: '' });
       setImportPreview(null);
       setEditingSnapId(null);
-      toast(editingSnapId != null ? '快照已更新' : '快照已保存');
-      reload();
+      toast(wasEdit ? '快照已更新' : '快照已保存');
+      if (wasEdit) reload();
+      else setSnapOffset(0);
     } catch (e) { toast(String(e)); }
   };
 
@@ -196,6 +217,7 @@ export default function Capital() {
         cash?: number;
         position_value?: number;
         positions?: SnapPosition[];
+        missing_quotes?: string[];
         reason?: string;
       }>(`/api/capital/estimate?date=${snapForm.snap_date}`);
       if (!est.ok) {
@@ -217,6 +239,9 @@ export default function Capital() {
         positions: toEditPositions(est.positions ?? []),
       }));
       toast(`已填入推算值：现金 ¥${fmtMoney(est.cash ?? 0)} + 持仓 ¥${fmtMoney(est.position_value ?? 0)}`);
+      if (est.missing_quotes?.length) {
+        toast(`以下标的无行情，市值可能不准：${est.missing_quotes.join('、')}`);
+      }
     } catch (e) { toast(String(e)); } finally {
       setEstimating(false);
     }
@@ -406,8 +431,9 @@ export default function Capital() {
           </div>
         )}
         {snaps.length === 0 ? <Empty text="收盘后上传持仓截图，或从交易推算总资产" /> : (
+          <>
           <div className="snap-card-list">
-            {snaps.slice(0, 20).map(s => {
+            {snaps.map(s => {
               const expanded = expandedSnapId === s.id;
               const positions = s.positions ?? [];
               return (
@@ -467,6 +493,22 @@ export default function Capital() {
               );
             })}
           </div>
+          {snapTotal > PAGE_SIZE && (
+            <div className="row" style={{ marginTop: 12, justifyContent: 'space-between' }}>
+              <button className="ghost" disabled={snapOffset <= 0}
+                onClick={() => setSnapOffset(o => Math.max(0, o - PAGE_SIZE))}>
+                ← 上一页
+              </button>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {snapOffset + 1}–{Math.min(snapOffset + PAGE_SIZE, snapTotal)} / {snapTotal}
+              </span>
+              <button className="ghost" disabled={snapOffset + PAGE_SIZE >= snapTotal}
+                onClick={() => setSnapOffset(o => o + PAGE_SIZE)}>
+                下一页 →
+              </button>
+            </div>
+          )}
+          </>
         )}
       </div>
     </div>
