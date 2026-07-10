@@ -67,8 +67,25 @@ function organizeSections(trades: DayTrade[], tGroups: TGroup[]) {
   return sections;
 }
 
+function normalizeScore(value: unknown): number | null {
+  if (value == null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** 圆点显示分：默认跟 AI；仅当用户手动改分（final ≠ ai）时才显示 final。 */
 function scoreForDots(entry: ScoreEntry): number {
-  return entry.final ?? entry.ai ?? 0;
+  const ai = normalizeScore(entry.ai);
+  const final = normalizeScore(entry.final);
+  if (ai != null && final != null && final !== ai) {
+    return final;
+  }
+  return ai ?? final ?? 0;
+}
+
+function scoreDisplayValue(entry: ScoreEntry): string | number {
+  const dots = scoreForDots(entry);
+  return dots > 0 ? dots : '—';
 }
 
 function ScoreDimRows({
@@ -93,7 +110,7 @@ function ScoreDimRows({
           return null;
         }
         return (
-          <div className="score-row score-row-wrap" key={dim}>
+          <div className="score-row score-row-wrap" key={`${dim}-${entry.ai ?? ''}-${entry.final ?? ''}`}>
             <span className="score-dim">{dimLabel}</span>
             <div className="score-dots">
               {Array.from({ length: 10 }, (_, i) => i + 1).map(v => (
@@ -106,7 +123,7 @@ function ScoreDimRows({
                   onClick={() => onSetScore?.(dim, v)}
                 />
               ))}
-              <span className="print-only score-print-value">{entry.final ?? entry.ai ?? '—'}</span>
+              <span className="print-only score-print-value">{scoreDisplayValue(entry)}</span>
             </div>
             {entry.ai != null && <span className="tag gold no-print">AI {entry.ai}</span>}
             {entry.comment && <span className="score-comment-wrap">{entry.comment}</span>}

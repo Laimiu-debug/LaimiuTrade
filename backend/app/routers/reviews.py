@@ -114,13 +114,24 @@ def _normalize_ai_trade_items(result: dict, expected_ids: list[int] | None) -> l
     return normalized
 
 
+def _coerce_int(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _sync_final_with_ai(dim_entry: dict, old_ai: int | None) -> None:
     """AI 重新打分后同步 final；仅当用户未手动改过（final 为空或仍等于旧 ai）时更新。"""
-    new_ai = dim_entry.get("ai")
+    new_ai = _coerce_int(dim_entry.get("ai"))
     if new_ai is None:
         return
-    final = dim_entry.get("final")
-    if final is None or (old_ai is not None and final == old_ai):
+    dim_entry["ai"] = new_ai
+    final_int = _coerce_int(dim_entry.get("final"))
+    old_ai_int = _coerce_int(old_ai)
+    if final_int is None or old_ai_int is None or final_int == old_ai_int:
         dim_entry["final"] = new_ai
 
 
@@ -213,9 +224,9 @@ def _merge_daily_scores_from_ai(trade_scores: dict, result: dict) -> dict:
                 if score_raw is not None:
                     try:
                         holistic = int(score_raw)
+                        old_ai = _coerce_int(daily[dim].get("ai"))
                         daily[dim]["ai"] = holistic
-                        if daily[dim].get("final") is None:
-                            daily[dim]["final"] = holistic
+                        _sync_final_with_ai(daily[dim], old_ai)
                     except (TypeError, ValueError):
                         pass
     return daily
