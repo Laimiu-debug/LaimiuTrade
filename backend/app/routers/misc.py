@@ -79,6 +79,8 @@ def pick_folder_api():
         raise HTTPException(500, f"无法打开文件夹选择框：{exc}") from exc
     if err:
         raise HTTPException(500, f"无法打开文件夹选择框：{err}")
+    if path and not folder_dialog.is_plausible_folder_path(path):
+        return {"path": None, "cancelled": True}
     if not path:
         return {"path": None, "cancelled": True}
     return {"path": path, "cancelled": False}
@@ -196,6 +198,10 @@ def put_settings(body: SettingsIn, db: Session = Depends(get_db)):
     for k in list(values):
         if k in _SECRET_KEYS and values[k] == "":
             values.pop(k, None)
+    if "pdf_export_dir" in values:
+        pdf_dir = str(values["pdf_export_dir"]).strip()
+        if pdf_dir and not folder_dialog.is_plausible_folder_path(pdf_dir):
+            values["pdf_export_dir"] = ""
     settings_svc.set_many(db, values)
     return {"ok": True}
 

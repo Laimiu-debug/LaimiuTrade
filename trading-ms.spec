@@ -15,7 +15,13 @@ datas = [
     ("backend/assets/icon.png", "assets"),
 ]
 binaries = []
-hiddenimports = collect_submodules("uvicorn") + ["pystray", "PIL", "PIL.Image", "PIL.ImageDraw"]
+hiddenimports = collect_submodules("uvicorn") + [
+    "pystray",
+    "pystray._win32",
+    "PIL",
+    "PIL.Image",
+    "PIL.ImageDraw",
+]
 
 # akshare 依赖大量包内数据文件，整体收集
 ak_datas, ak_binaries, ak_hidden = collect_all("akshare")

@@ -13,6 +13,7 @@ if __name__ == "__main__" and len(sys.argv) >= 2 and sys.argv[1] == "--pick-fold
     run_pick_folder_cli()
     sys.exit(0)
 
+import ctypes
 import os
 import socket
 import threading
@@ -30,6 +31,8 @@ from app.main import app
 HOST = "127.0.0.1"
 PORT = 8000
 URL = f"http://{HOST}:{PORT}"
+MUTEX_NAME = "Global\\TradingMS.SingleInstance"
+_mutex_handle = None
 
 
 def assets_dir() -> Path:
@@ -44,9 +47,36 @@ def load_tray_image() -> Image.Image:
     if icon_path.exists():
         img = Image.open(icon_path).convert("RGBA")
         return img.resize((64, 64), Image.Resampling.LANCZOS)
-    # 兜底：简单占位图
-    img = Image.new("RGBA", (64, 64), (12, 14, 19, 255))
+    img = Image.new("RGBA", (64, 64), (232, 168, 124, 255))
     return img
+
+
+def setup_logging() -> None:
+    if getattr(sys, "frozen", False) and sys.stdout is None:
+        log_file = open(DATA_DIR / "app.log", "a", encoding="utf-8", buffering=1)
+        sys.stdout = log_file
+        sys.stderr = log_file
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def acquire_single_instance() -> bool:
+    """返回 True 表示当前为唯一实例；False 表示已有实例在运行。"""
+    global _mutex_handle
+    if sys.platform != "win32":
+        return True
+    kernel32 = ctypes.windll.kernel32
+    ERROR_ALREADY_EXISTS = 183
+    _mutex_handle = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+    if not _mutex_handle:
+        return True
+    if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+        kernel32.CloseHandle(_mutex_handle)
+        _mutex_handle = None
+        return False
+    return True
 
 
 def port_in_use() -> bool:
@@ -56,18 +86,29 @@ def port_in_use() -> bool:
 
 
 def run_server() -> None:
-    uvicorn.run(app, host=HOST, port=PORT, log_level="info")
+    try:
+        uvicorn.run(app, host=HOST, port=PORT, log_level="info")
+    except Exception as exc:  # noqa: BLE001
+        log(f"[TradingMS] 服务启动失败: {exc}")
 
 
 def main() -> None:
-    if getattr(sys, "frozen", False) and sys.stdout is None:
-        log_file = open(DATA_DIR / "app.log", "a", encoding="utf-8", buffering=1)
-        sys.stdout = log_file
-        sys.stderr = log_file
+    setup_logging()
+
+    if not acquire_single_instance():
+        log("[TradingMS] 已有实例在运行，打开浏览器")
+        webbrowser.open(URL)
+        return
 
     if port_in_use():
-        # 已有实例在运行，直接打开页面即可
-        webbrowser.open(URL)
+        log(f"[TradingMS] 端口 {PORT} 已被占用，请关闭占用该端口的程序后重试")
+        if sys.platform == "win32":
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                f"端口 {PORT} 已被其他程序占用。\n请关闭开发服务器或其它占用程序后重新启动 Trading MS。",
+                "Trading MS",
+                0x10,
+            )
         return
 
     server = threading.Thread(target=run_server, daemon=True)
@@ -92,7 +133,12 @@ def main() -> None:
             pystray.MenuItem("退出程序", on_quit),
         ),
     )
-    tray.run()  # 阻塞在托盘消息循环，退出菜单触发 os._exit
+    try:
+        log("[TradingMS] 启动托盘图标")
+        tray.run()
+    except Exception as exc:  # noqa: BLE001
+        log(f"[TradingMS] 托盘启动失败: {exc}")
+        server.join()
 
 
 if __name__ == "__main__":

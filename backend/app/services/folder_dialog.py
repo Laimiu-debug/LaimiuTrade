@@ -1,34 +1,58 @@
 """本地文件夹选择（Windows）。
 
-API 工作线程中不可直接调 GUI；通过独立 PowerShell 进程弹出对话框。
+API 工作线程中不可直接调 GUI；通过独立子进程弹出对话框。
 """
 
 import base64
 import ctypes
 import ctypes.wintypes as wintypes
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
+_PATH_RE = re.compile(r"^[A-Za-z]:[\\/].+")
 
-def _powershell_encoded(script: str) -> list[str]:
+
+def is_plausible_folder_path(value: str | None) -> bool:
+    return _is_plausible_path(value)
+
+
+def _is_plausible_path(value: str | None) -> bool:
+    if not value:
+        return False
+    text = value.strip()
+    if text.lower() in {"true", "false", "none"}:
+        return False
+    return bool(_PATH_RE.match(text) or text.startswith("\\\\"))
+
+
+def _extract_path_from_text(text: str) -> str | None:
+    """从可能混入 PowerShell 布尔输出的文本中提取文件夹路径。"""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    for line in reversed(lines):
+        if _is_plausible_path(line):
+            return line.strip()
+    joined = (text or "").strip()
+    if _is_plausible_path(joined):
+        return joined
+    return None
+
+
+def _powershell_encoded(script: str, *, hidden: bool = False) -> list[str]:
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-    return [
-        "powershell.exe",
-        "-NoProfile",
-        "-STA",
-        "-WindowStyle",
-        "Hidden",
-        "-EncodedCommand",
-        encoded,
-    ]
+    cmd = ["powershell.exe", "-NoProfile", "-STA"]
+    if hidden:
+        cmd += ["-WindowStyle", "Hidden"]
+    cmd += ["-EncodedCommand", encoded]
+    return cmd
 
 
-def _subprocess_hide_window() -> dict:
+def _subprocess_hide_window(*, hide: bool = True) -> dict:
     """Windows 下避免弹出黑色命令行窗口。"""
-    if sys.platform != "win32":
+    if sys.platform != "win32" or not hide:
         return {}
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     startupinfo = subprocess.STARTUPINFO()
@@ -37,45 +61,67 @@ def _subprocess_hide_window() -> dict:
     return {"creationflags": flags, "startupinfo": startupinfo}
 
 
+def _foreground_hwnd() -> int:
+    if sys.platform != "win32":
+        return 0
+    return int(ctypes.windll.user32.GetForegroundWindow())
+
+
 def _pick_folder_powershell(title: str) -> tuple[str | None, str | None]:
     """PowerShell FolderBrowserDialog。返回 (path, error)，双 None 表示用户取消。"""
     safe_title = title.replace("'", "''")
     ps = f"""
 Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Application]::EnableVisualStyles()
+$owner = New-Object System.Windows.Forms.Form
+$owner.ShowInTaskbar = $false
+$owner.TopMost = $true
+$owner.StartPosition = 'CenterScreen'
+$owner.Size = New-Object System.Drawing.Size(0, 0)
+$owner.Opacity = 0
+[void]$owner.Show()
+[void]$owner.Activate()
+[void]$owner.BringToFront()
+[void]$owner.Focus()
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
 $dialog.Description = '{safe_title}'
 $dialog.ShowNewFolderButton = $true
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+$result = $dialog.ShowDialog($owner)
+[void]$owner.Dispose()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {{
     [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
     Write-Output $dialog.SelectedPath
 }}
 """
     try:
         result = subprocess.run(
-            _powershell_encoded(ps),
+            _powershell_encoded(ps, hidden=False),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
             timeout=120,
-            **_subprocess_hide_window(),
+            **_subprocess_hide_window(hide=True),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         return None, str(exc)
     if result.returncode != 0:
         err = (result.stderr or "").strip() or f"PowerShell 退出码 {result.returncode}"
         return None, err
-    path = (result.stdout or "").strip()
+    path = _extract_path_from_text(result.stdout or "")
     if not path:
         return None, None
     return path, None
 
 
 def _pick_folder_win32(title: str) -> str | None:
-    """SHBrowseForFolderW（仅用于独立子进程 CLI）。"""
+    """SHBrowseForFolderW（独立子进程 CLI 或主线程）。"""
+    if sys.platform != "win32":
+        return None
+
     ole32 = ctypes.OleDLL("ole32")
     shell32 = ctypes.windll.shell32
+    user32 = ctypes.windll.user32
 
     ole32.CoInitialize(None)
     try:
@@ -96,7 +142,7 @@ def _pick_folder_win32(title: str) -> str | None:
 
         display_name = ctypes.create_unicode_buffer(260)
         bi = BROWSEINFOW()
-        bi.hwndOwner = 0
+        bi.hwndOwner = _foreground_hwnd()
         bi.pidlRoot = 0
         bi.pszDisplayName = ctypes.cast(display_name, wintypes.LPWSTR)
         bi.lpszTitle = title
@@ -105,6 +151,8 @@ def _pick_folder_win32(title: str) -> str | None:
         bi.lParam = 0
         bi.iImage = 0
 
+        if bi.hwndOwner:
+            user32.SetForegroundWindow(bi.hwndOwner)
         pidl = shell32.SHBrowseForFolderW(ctypes.byref(bi))
         if not pidl:
             return None
@@ -113,7 +161,8 @@ def _pick_folder_win32(title: str) -> str | None:
         try:
             if not shell32.SHGetPathFromIDListW(pidl, path_buf):
                 return None
-            return path_buf.value.strip() or None
+            path = path_buf.value.strip() or None
+            return path if _is_plausible_path(path) else None
         finally:
             ole32.CoTaskMemFree(pidl)
     finally:
@@ -124,70 +173,71 @@ def pick_folder_dialog(title: str = "选择数据存储目录") -> str | None:
     """在当前进程主线程弹出（供 CLI / 轻量子进程使用）。"""
     if sys.platform != "win32":
         return None
-    path, err = _pick_folder_powershell(title)
-    if path:
+    try:
+        path = _pick_folder_win32(title)
+        if path:
+            return path
+    except Exception:  # noqa: BLE001
+        path, _err = _pick_folder_powershell(title)
         return path
-    if err:
-        try:
-            return _pick_folder_win32(title)
-        except Exception:  # noqa: BLE001
-            return None
     return None
 
 
-def _helper_cmd(title: str, out_file: str) -> list[str]:
+def _helper_cmd(title: str, out_file: str) -> tuple[list[str], dict[str, str]]:
+    env = os.environ.copy()
+    env["TMS_PICK_TITLE"] = title
     if getattr(sys, "frozen", False):
-        return [sys.executable, "--pick-folder", title, out_file]
+        return [sys.executable, "--pick-folder", out_file], env
+    backend_dir = Path(__file__).resolve().parents[2]
+    env["PYTHONPATH"] = str(backend_dir)
     return [
         sys.executable,
         "-m",
         "app.services.folder_dialog",
         title,
         out_file,
-    ]
+    ], env
 
 
 def _pick_folder_subprocess(title: str) -> tuple[str | None, str | None]:
     """独立子进程弹出对话框（API 工作线程不可直接调 GUI）。"""
     if getattr(sys, "frozen", False):
         cwd = str(Path(sys.executable).resolve().parent)
-        env = os.environ.copy()
     else:
-        backend_dir = Path(__file__).resolve().parents[2]
-        cwd = str(backend_dir)
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(backend_dir)
+        cwd = str(Path(__file__).resolve().parents[2])
 
+    cmd, env = _helper_cmd(title, "")
     fd, out_path = tempfile.mkstemp(suffix=".txt", prefix="tms-pick-")
     os.close(fd)
+    out_path_str = str(Path(out_path))
+    if getattr(sys, "frozen", False):
+        cmd[2] = out_path_str
+    else:
+        cmd[-1] = out_path_str
+
     try:
         result = subprocess.run(
-            _helper_cmd(title, out_path),
+            cmd,
             timeout=120,
             cwd=cwd,
             env=env,
-            **_subprocess_hide_window(),
+            **_subprocess_hide_window(hide=False),
         )
         if result.returncode != 0:
             return None, f"子进程退出码 {result.returncode}"
-        text = Path(out_path).read_text(encoding="utf-8").strip()
-        return (text if text else None), None
+        raw = Path(out_path_str).read_text(encoding="utf-8-sig")
+        path = _extract_path_from_text(raw)
+        return (path if path else None), None
     except (subprocess.TimeoutExpired, OSError) as exc:
         return None, str(exc)
     finally:
-        Path(out_path).unlink(missing_ok=True)
+        Path(out_path_str).unlink(missing_ok=True)
 
 
 def pick_folder(title: str = "选择数据存储目录") -> tuple[str | None, str | None]:
     """从 API 线程安全调用。返回 (path, error)，双 None 表示用户取消。"""
     if sys.platform != "win32":
         return None, "仅支持 Windows"
-
-    path, err = _pick_folder_powershell(title)
-    if path:
-        return path, None
-    if not err:
-        return None, None
 
     sub_path, sub_err = _pick_folder_subprocess(title)
     if sub_path:
@@ -199,13 +249,17 @@ def pick_folder(title: str = "选择数据存储目录") -> tuple[str | None, st
 
 def run_pick_folder_cli() -> None:
     """CLI：弹出对话框并将结果写入 out_file。"""
+    title = os.environ.get("TMS_PICK_TITLE", "").strip()
+    out_file = ""
     if len(sys.argv) >= 2 and sys.argv[1] == "--pick-folder":
-        title = sys.argv[2] if len(sys.argv) > 2 else "选择数据存储目录"
-        out_file = sys.argv[3] if len(sys.argv) > 3 else ""
-    else:
-        title = sys.argv[1] if len(sys.argv) > 1 else "选择数据存储目录"
         out_file = sys.argv[2] if len(sys.argv) > 2 else ""
-    path = pick_folder_dialog(title) or ""
+        if not title and len(sys.argv) > 3:
+            title = sys.argv[3]
+    else:
+        title = title or (sys.argv[1] if len(sys.argv) > 1 else "选择数据存储目录")
+        out_file = sys.argv[2] if len(sys.argv) > 2 else ""
+
+    path = pick_folder_dialog(title or "选择数据存储目录") or ""
     if out_file:
         Path(out_file).write_text(path, encoding="utf-8")
     else:

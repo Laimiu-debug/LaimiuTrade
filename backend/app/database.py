@@ -19,15 +19,66 @@ ROOT_DIR = resolve_root_dir()
 _LOCATION_FILE = ROOT_DIR / "data_location.txt"
 
 
+def _read_location_file(path: Path) -> Path | None:
+    if not path.exists():
+        return None
+    line = path.read_text(encoding="utf-8").strip()
+    if not line:
+        return None
+    p = Path(line).expanduser()
+    if not p.is_absolute():
+        p = (path.parent / p).resolve()
+    return p
+
+
+def _has_database(path: Path) -> bool:
+    return (path / "laimiutrade.db").is_file()
+
+
+def _find_existing_data_dir() -> Path | None:
+    """打包后从 exe 目录向上查找已有数据，避免 dist/ 下新建空库。"""
+    if not getattr(sys, "frozen", False):
+        return None
+
+    for loc_file in (_LOCATION_FILE, ROOT_DIR.parent / "data_location.txt"):
+        target = _read_location_file(loc_file)
+        if target and _has_database(target):
+            return target
+
+    for candidate in (ROOT_DIR.parent / "data",):
+        if _has_database(candidate):
+            return candidate.resolve()
+    return None
+
+
+def _pick_data_dir(default: Path, legacy: Path | None) -> Path:
+    if legacy is None:
+        return default
+    if not _has_database(default):
+        return legacy
+    if not _has_database(legacy):
+        return default
+    default_db = default / "laimiutrade.db"
+    legacy_db = legacy / "laimiutrade.db"
+    if legacy_db.stat().st_size > default_db.stat().st_size:
+        return legacy
+    return default
+
+
 def _resolve_data_dir() -> Path:
-    if _LOCATION_FILE.exists():
-        line = _LOCATION_FILE.read_text(encoding="utf-8").strip()
-        if line:
-            p = Path(line).expanduser()
-            if not p.is_absolute():
-                p = (ROOT_DIR / p).resolve()
-            return p
-    return ROOT_DIR / "data"
+    target = _read_location_file(_LOCATION_FILE)
+    if target:
+        return target
+
+    default = ROOT_DIR / "data"
+    legacy = _find_existing_data_dir()
+    chosen = _pick_data_dir(default, legacy)
+    if legacy and chosen == legacy:
+        try:
+            _LOCATION_FILE.write_text(str(chosen), encoding="utf-8")
+        except OSError:
+            pass
+    return chosen
 
 
 DATA_DIR = _resolve_data_dir()
