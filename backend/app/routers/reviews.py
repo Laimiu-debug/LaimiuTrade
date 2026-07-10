@@ -731,29 +731,113 @@ def ai_review(day: date, db: Session = Depends(get_db)):
     }
 
 
+def _recent_market_reviews(db: Session, day: date, limit: int = 5) -> str:
+    """近几日交易者盘面观察摘录，供预演分析参考板块/情绪。"""
+    rows = (
+        db.query(DailyReview)
+        .filter(DailyReview.review_date <= day)
+        .order_by(DailyReview.review_date.desc())
+        .limit(limit)
+        .all()
+    )
+    lines: list[str] = []
+    for row in reversed(rows):
+        obs = (row.market_observation or "").strip()
+        forecast = (row.next_market_forecast or "").strip()
+        parts: list[str] = []
+        if obs:
+            parts.append(f"盘面:{obs[:180]}")
+        if forecast and row.review_date != day:
+            parts.append(f"次日预判:{forecast[:120]}")
+        if parts:
+            lines.append(f"{row.review_date}: " + " | ".join(parts))
+    return "\n".join(lines)
+
+
+def _rehearsal_codes(rehearsal: list, today_positions: list, watchlist: list) -> list[str]:
+    codes: list[str] = []
+    seen: set[str] = set()
+    for group in (rehearsal, today_positions, watchlist):
+        for item in group:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code") or "").strip()
+            if code and code not in seen:
+                seen.add(code)
+                codes.append(code)
+    return codes
+
+
+class RehearsalAiIn(BaseModel):
+    """前端实时提交的预演数据，避免未保存时用到旧库内数据。"""
+    next_position_rehearsal: list | None = None
+    next_watchlist: list | None = None
+    next_market_forecast: str | None = None
+    next_position_plan: str | None = None
+    next_risk_plan: str | None = None
+    market_observation: str | None = None
+    decision_review: str | None = None
+    mistakes: str | None = None
+    ai_summary: str | None = None
+
+
 @router.post("/daily/{day}/ai-rehearsal")
-def ai_rehearsal_review(day: date, db: Session = Depends(get_db)):
+def ai_rehearsal_review(day: date, body: RehearsalAiIn | None = None, db: Session = Depends(get_db)):
     row = _get_or_create_daily(db, day)
-    rehearsal = json.loads(getattr(row, "next_position_rehearsal", None) or "[]")
+    payload = body or RehearsalAiIn()
+
+    rehearsal = payload.next_position_rehearsal
+    if rehearsal is None:
+        rehearsal = json.loads(getattr(row, "next_position_rehearsal", None) or "[]")
     if not isinstance(rehearsal, list):
         rehearsal = []
-    watchlist = json.loads(row.next_watchlist or "[]")
+
+    watchlist = payload.next_watchlist
+    if watchlist is None:
+        watchlist = json.loads(row.next_watchlist or "[]")
     if not isinstance(watchlist, list):
         watchlist = []
+
+    plans = {
+        "next_market_forecast": payload.next_market_forecast if payload.next_market_forecast is not None else row.next_market_forecast,
+        "next_position_plan": payload.next_position_plan if payload.next_position_plan is not None else row.next_position_plan,
+        "next_risk_plan": payload.next_risk_plan if payload.next_risk_plan is not None else row.next_risk_plan,
+    }
+    review_texts = {
+        "market_observation": payload.market_observation if payload.market_observation is not None else row.market_observation,
+        "decision_review": payload.decision_review if payload.decision_review is not None else row.decision_review,
+        "mistakes": payload.mistakes if payload.mistakes is not None else row.mistakes,
+        "ai_summary": payload.ai_summary if payload.ai_summary is not None else row.ai_summary,
+    }
+
+    # 将前端最新编辑同步入库，保证与提示词一致
+    row.next_position_rehearsal = json.dumps(rehearsal, ensure_ascii=False)
+    row.next_watchlist = json.dumps(watchlist, ensure_ascii=False)
+    row.next_market_forecast = plans["next_market_forecast"] or ""
+    row.next_position_plan = plans["next_position_plan"] or ""
+    row.next_risk_plan = plans["next_risk_plan"] or ""
+    if payload.market_observation is not None:
+        row.market_observation = payload.market_observation
+    if payload.decision_review is not None:
+        row.decision_review = payload.decision_review
+    if payload.mistakes is not None:
+        row.mistakes = payload.mistakes
+
     snap = db.query(Snapshot).filter(Snapshot.snap_date == day).first()
     today_positions = _positions_for_day(db, day)
     baseline = _rehearsal_baseline(db, day, snap)
+    codes = _rehearsal_codes(rehearsal, today_positions, watchlist)
+    market_text = market_svc.rehearsal_market_context(db, day, codes)
+    recent_reviews_text = _recent_market_reviews(db, day)
     try:
         analysis = ai_svc.generate_rehearsal_analysis(
             db, day, rehearsal, watchlist,
-            {
-                "next_market_forecast": row.next_market_forecast,
-                "next_position_plan": row.next_position_plan,
-                "next_risk_plan": row.next_risk_plan,
-            },
+            plans,
             today_positions,
             baseline,
-            row.rehearsal_ai_analysis,
+            market_text=market_text,
+            review_texts=review_texts,
+            recent_reviews_text=recent_reviews_text,
         )
     except ai_svc.AIUnavailable as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -762,6 +846,8 @@ def ai_rehearsal_review(day: date, db: Session = Depends(get_db)):
 
     if isinstance(analysis, str) and analysis.strip():
         row.rehearsal_ai_analysis = analysis.strip()
+        db.commit()
+    else:
         db.commit()
     return {"rehearsal_ai_analysis": row.rehearsal_ai_analysis}
 

@@ -537,3 +537,57 @@ def market_context_text(db: Session, codes: list[str], day: date) -> str:
         seq = " -> ".join(f"{k['close']:.2f}" for k in recent)
         lines.append(f"{label or code}（{code}）近{len(recent)}日收盘: {seq}{change}")
     return "\n".join(lines) if lines else "（行情数据不可用）"
+
+
+def rehearsal_market_context(db: Session, day: date, codes: list[str], lookback: int = 7) -> str:
+    """预演分析用：近 N 日大盘走势 + 预演涉及标的涨跌。"""
+    sections: list[str] = []
+    day_str = day.isoformat()
+    index_targets = [
+        ("000001.SH", "上证指数"),
+        ("399001.SZ", "深证成指"),
+        ("399006.SZ", "创业板指"),
+        ("000300.SH", "沪深300"),
+        ("000905.SH", "中证500"),
+    ]
+    index_lines: list[str] = []
+    for code, label in index_targets:
+        klines = [k for k in get_daily(db, code, limit=lookback + 5)["klines"] if k["date"] <= day_str][-lookback:]
+        if len(klines) < 2:
+            continue
+        first_close = klines[0]["close"]
+        last_close = klines[-1]["close"]
+        period_chg = ((last_close / first_close) - 1) * 100 if first_close else 0.0
+        daily_parts: list[str] = []
+        for i, k in enumerate(klines):
+            chg = ""
+            if i > 0 and klines[i - 1]["close"]:
+                chg = f"({((k['close'] / klines[i - 1]['close']) - 1) * 100:+.1f}%)"
+            daily_parts.append(f"{k['date'][5:]}:{k['close']:.2f}{chg}")
+        index_lines.append(f"- {label}: 近{len(klines)}日 {period_chg:+.2f}% | {' '.join(daily_parts)}")
+    if index_lines:
+        sections.append(f"【大盘近{lookback}个交易日】\n" + "\n".join(index_lines))
+
+    stock_lines: list[str] = []
+    seen: set[str] = set()
+    for raw in codes:
+        code = raw.split(".")[0] if "." in raw else raw
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        klines = [k for k in get_daily(db, code, limit=lookback + 5)["klines"] if k["date"] <= day_str][-lookback:]
+        if len(klines) < 2:
+            continue
+        first_close = klines[0]["close"]
+        last_close = klines[-1]["close"]
+        period_chg = ((last_close / first_close) - 1) * 100 if first_close else 0.0
+        today_chg = ""
+        if klines[-2]["close"]:
+            today_chg = f"，当日{((last_close / klines[-2]['close']) - 1) * 100:+.2f}%"
+        stock_lines.append(f"- {code}: 近{len(klines)}日 {period_chg:+.2f}%{today_chg}，收 {last_close:.3f}")
+        if len(stock_lines) >= 12:
+            break
+    if stock_lines:
+        sections.append("【预演/持仓相关标的走势】\n" + "\n".join(stock_lines))
+
+    return "\n\n".join(sections) if sections else "（行情数据不可用）"

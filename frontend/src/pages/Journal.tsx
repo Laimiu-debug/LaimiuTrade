@@ -746,11 +746,20 @@ export default function Journal() {
   };
 
   const aiRehearsal = async () => {
-    if (!rehearsal.length) { toast('请先填写明日操作预演'); return; }
-    await save(true);
+    if (!data || !(data.next_position_rehearsal?.length)) { toast('请先填写明日操作预演'); return; }
     setRehearsalReviewing(true);
     try {
-      const result = await api.post<{ rehearsal_ai_analysis: string }>(`/api/reviews/daily/${day}/ai-rehearsal`);
+      const result = await api.post<{ rehearsal_ai_analysis: string }>(`/api/reviews/daily/${day}/ai-rehearsal`, {
+        next_position_rehearsal: data.next_position_rehearsal ?? [],
+        next_watchlist: data.next_watchlist ?? [],
+        next_market_forecast: data.next_market_forecast ?? '',
+        next_position_plan: data.next_position_plan ?? '',
+        next_risk_plan: data.next_risk_plan ?? '',
+        market_observation: data.market_observation ?? '',
+        decision_review: data.decision_review ?? '',
+        mistakes: data.mistakes ?? '',
+        ai_summary: data.ai_summary ?? '',
+      });
       patch({ rehearsal_ai_analysis: result.rehearsal_ai_analysis ?? '' });
       toast('AI 预演分析已生成');
     } catch (e) { toast(String(e)); } finally { setRehearsalReviewing(false); }

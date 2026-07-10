@@ -374,9 +374,12 @@ def generate_rehearsal_analysis(
     plans: dict[str, str],
     today_positions: list,
     baseline: dict,
-    existing: str = "",
+    market_text: str = "",
+    review_texts: dict[str, str] | None = None,
+    recent_reviews_text: str = "",
 ) -> str:
     """分析当日填写的次日操作预演与预研计划。"""
+    review_texts = review_texts or {}
     def fmt_positions(items: list) -> str:
         if not items:
             return "（无）"
@@ -412,7 +415,19 @@ def generate_rehearsal_analysis(
     total = baseline.get("total_assets", 0)
 
     prompt = f"""你是一位 A 股波段交易教练。交易者刚完成 {review_date.isoformat()} 复盘，并填写了**明日操作预演**与**次日预研**。
-请对其预演决策做专业点评：仓位变化是否合理、资金是否够用、逻辑是否自洽、风险是否覆盖。
+请结合**近期大盘/板块走势**与交易者当日复盘，评判预演是否适应当前市场环境。
+
+## 近期大盘与板块行情（客观数据，须优先参考）
+{market_text or '（行情数据不可用）'}
+
+## 近几日交易者盘面记录（其主观观察，可交叉验证）
+{recent_reviews_text or '（无近期盘面记录）'}
+
+## 当日复盘摘要
+- 盘面观察：{review_texts.get('market_observation') or '（未填写）'}
+- 决策复盘：{review_texts.get('decision_review') or '（未填写）'}
+- 错误教训：{review_texts.get('mistakes') or '（未填写）'}
+- 交易 AI 总评：{review_texts.get('ai_summary') or '（无）'}
 
 ## 今日收盘基准
 - 可用现金约 {cash} 元，总资产约 {total} 元
@@ -422,7 +437,7 @@ def generate_rehearsal_analysis(
 ## 明日操作预演（计划收盘持仓）
 {rehearsal_block}
 
-## 次日预研
+## 次日预研（交易者自写预判）
 - 大盘预判：{plans.get('next_market_forecast') or '（未填写）'}
 - 仓位计划：{plans.get('next_position_plan') or '（未填写）'}
 - 风险预案：{plans.get('next_risk_plan') or '（未填写）'}
@@ -430,15 +445,13 @@ def generate_rehearsal_analysis(
 ## 明日观察标的
 {watch_block}
 
-## 已有分析（可补充完善，避免重复）
-{existing or '（无）'}
-
 ## 输出要求
-直接输出中文分析正文（非 JSON），4-8 段，包含：
-1. 预演仓位变化解读（增减仓/新开/清仓的逻辑）
-2. 资金与仓位匹配度（现金是否充裕、是否过度集中；若 price×qty 远超总资产，应指出该标的现价可能有 OCR 小数点错误，以市值÷数量为准）
-3. 预研与预演是否一致（预判、观察标的、预演持仓是否对得上）
-4. 潜在风险与改进建议（具体、可执行）
+请**重新独立分析**，勿沿用任何旧结论。直接输出中文正文（非 JSON），5-8 段，包含：
+1. **市场环境判断**：结合近几日大盘/指数/相关标的走势，当前处于什么阶段（趋势/震荡/退潮），哪些板块相对强/弱
+2. **预演与环境匹配度**：在以上市场背景下，增减仓/新开/清仓是否合理，是否与大盘及板块节奏一致
+3. **资金与仓位**：现金是否充裕、集中度是否过高；若 price×qty 远超总资产，指出现价可能有 OCR 小数点错误
+4. **预研与预演一致性**：交易者的大盘预判、观察标的、预演持仓是否逻辑自洽
+5. **风险与改进**：具体可执行的建议（含若大盘/板块走弱时该如何调整）
 语气直接，禁止空话。"""
 
     return _chat(db, [{"role": "user", "content": prompt}]).strip()
