@@ -13,6 +13,10 @@
 - **灵感闪记**：轻量卡片 + 每日随机温故
 - **导出**：复盘打印为 PDF、JSON 全量备份、Markdown 导出
 
+## 下载
+
+[最新 Release](https://github.com/Laimiu-debug/LaimiuTrade/releases/latest) 下载 `TradingMS.exe`，双击即可运行。
+
 ## 快速开始（exe 单文件）
 
 已打包用户直接双击 `TradingMS.exe` 即可：自动启动本地服务并打开浏览器，
@@ -31,6 +35,18 @@ backend\.venv\Scripts\pip install pyinstaller
 backend\.venv\Scripts\pyinstaller --noconfirm --clean trading-ms.spec
 # 产物: dist\TradingMS.exe
 ```
+
+### GitHub 自动发版
+
+推送 `v*` 格式的 tag 后，GitHub Actions 会自动构建 exe 并发布到 [Releases](https://github.com/Laimiu-debug/LaimiuTrade/releases)：
+
+```bash
+git tag v0.1.0
+git push origin main
+git push origin v0.1.0
+```
+
+发版前确认：前端已能正常 `npm run build`，本地 PyInstaller 打包可成功（可选，CI 会独立构建）。
 
 ## 源码运行
 
