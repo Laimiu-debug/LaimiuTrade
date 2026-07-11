@@ -5,7 +5,7 @@ import {
   type DailyReview, type PositionRehearsal, type ScoreEntry, type SnapshotPosition,
   type TGroup, type TradeScoreBundle, type WatchItem,
 } from '../api';
-import { Empty, NumberInput, SideTag, useToast, DateInput, StockPicker } from '../components';
+import { Empty, QtyStepper, SideTag, useToast, DateInput, StockPicker } from '../components';
 import { printDailyReview } from '../printPage';
 import { fmtCnDate } from '../printCss';
 import {
@@ -18,6 +18,7 @@ import {
   PrintTradeSide,
 } from '../printLayout';
 import { PrintMarkdownBody } from '../printMarkdown';
+import { fetchCloseOnDay } from '../marketClose';
 import { PeriodRounds } from './periodicShared';
 import { useAiBusy } from '../AiBusy';
 import { confirmDiscard, useAutosave, useDirtyGuard } from '../hooks/usePersist';
@@ -317,17 +318,6 @@ function positionClose(p: SnapshotPosition | PositionRehearsal): number | null {
   return null;
 }
 
-async function fetchCloseOnDay(code: string, day: string): Promise<number | null> {
-  try {
-    const r = await api.get<{ klines: { date: string; close: number }[] }>(`/api/market/${code}?limit=120`);
-    const valid = r.klines.filter(k => k.date <= day);
-    if (valid.length === 0) return null;
-    return valid[valid.length - 1].close;
-  } catch {
-    return null;
-  }
-}
-
 function JournalPrintReport({ data, day, username }: { data: DailyReview; day: string; username: string }) {
   const tGroups = data.t_groups ?? [];
   const tradeCount = data.trades.length;
@@ -500,6 +490,7 @@ export default function Journal() {
   const [loading, setLoading] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [copyingRehearsal, setCopyingRehearsal] = useState(false);
+  const [rehearsalCloseLoading, setRehearsalCloseLoading] = useState<number | null>(null);
   const [rehearsalReviewing, setRehearsalReviewing] = useState(false);
   const [username, setUsername] = useState('');
   const [saving, setSaving] = useState(false);
@@ -895,8 +886,10 @@ export default function Journal() {
       const base = await Promise.all(
         filtered.map(async (p) => {
           const code = p.code!;
-          const fetched = await fetchCloseOnDay(code, day);
-          const close = fetched ?? positionClose(p) ?? undefined;
+          let close = positionClose(p) ?? undefined;
+          if (close == null) {
+            close = (await fetchCloseOnDay(code, day)) ?? undefined;
+          }
           return {
             code,
             name: p.name ?? '',
@@ -922,10 +915,15 @@ export default function Journal() {
   const pickRehearsalStock = async (i: number, code: string, name: string) => {
     const fromToday = data?.today_positions?.find(p => p.code === code);
     let close = fromToday ? positionClose(fromToday) : null;
-    if (close == null) {
-      close = await fetchCloseOnDay(code, day);
-    }
     setRehearsalRow(i, { code, name, close: close ?? undefined });
+    if (close != null) return;
+    setRehearsalCloseLoading(i);
+    try {
+      close = await fetchCloseOnDay(code, day);
+      if (close != null) setRehearsalRow(i, { close });
+    } finally {
+      setRehearsalCloseLoading(null);
+    }
   };
 
   const rehearsalStats = useMemo(() => {
@@ -962,8 +960,31 @@ export default function Journal() {
       projectedMv,
       projectedTotal: remainingCash + projectedMv,
       missingCodes,
+      todayByCode,
+      closeByCode,
     };
   }, [data, rehearsal]);
+
+  const setRehearsalQty = useCallback((i: number, newQty: number) => {
+    if (!data) return;
+    const row = rehearsal[i];
+    const clamped = Math.max(0, newQty);
+    if (clamped > row.qty && rehearsalStats) {
+      const close = row.close
+        ?? rehearsalStats.closeByCode.get(row.code)
+        ?? positionClose(data.today_positions?.find(p => p.code === row.code) ?? {})
+        ?? null;
+      if (close != null) {
+        const extraCost = (clamped - row.qty) * close;
+        const newRemaining = rehearsalStats.remainingCash - extraCost;
+        if (newRemaining < 0) {
+          toast(`剩余现金不足 ¥${fmtMoney(-newRemaining)}，无法加至 ${clamped} 股`);
+          return;
+        }
+      }
+    }
+    setRehearsalRow(i, { qty: clamped });
+  }, [data, rehearsal, rehearsalStats, setRehearsalRow, toast]);
 
   const renderTradeCard = (t: DayTrade, nested = false) => {
     if (!data) return null;
@@ -1009,7 +1030,7 @@ export default function Journal() {
           <div className="page-sub">复盘是交易者的第二战场</div>
         </div>
         <div className="row">
-          <DateInput value={day} onChange={requestDayChange} style={{ width: 150 }} />
+          <DateInput value={day} onChange={requestDayChange} />
           {(dirty || saving || autoSavedAt) && (
             <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
               {saving ? '保存中…' : dirty ? '有未保存修改' : `已自动保存 ${new Date(autoSavedAt!).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`}
@@ -1218,7 +1239,6 @@ export default function Journal() {
                 <button className="ghost" onClick={() => { void copyTodayToRehearsal(); }} disabled={copyingRehearsal}>
                   {copyingRehearsal ? '拉取行情中…' : '从今日持仓复制'}
                 </button>
-                <button className="ghost" onClick={() => setRehearsal([...rehearsal, { code: '', name: '', qty: 0, note: '新开仓' }])}>+ 预演新开仓</button>
                 <button onClick={aiRehearsal} disabled={rehearsalReviewing || rehearsal.length === 0}>
                   {rehearsalReviewing ? '分析中…' : '✦ AI 预演分析'}
                 </button>
@@ -1321,14 +1341,14 @@ export default function Journal() {
                       onSelect={(code, name) => { void pickRehearsalStock(i, code, name); }}
                       style={{ flex: 2, minWidth: 160 }}
                     />
-                    <label className="field" style={{ flex: '0 0 100px', margin: 0 }}>
+                    <label className="field" style={{ flex: '0 0 128px', margin: 0 }}>
                       <span>预演股数</span>
-                      <NumberInput value={String(r.qty)} onChange={v => setRehearsalRow(i, { qty: parseInt(v, 10) || 0 })} />
+                      <QtyStepper value={r.qty} onChange={v => setRehearsalQty(i, v)} step={100} />
                     </label>
                     <div className="field" style={{ flex: '0 0 88px', margin: 0 }}>
                       <span>收盘价</span>
-                      <div className="mono muted" style={{ fontSize: 13, padding: '8px 0' }}>
-                        {close != null ? close.toFixed(3) : '—'}
+                      <div className={`mono${rehearsalCloseLoading === i ? ' muted' : ''}`} style={{ fontSize: 13, padding: '8px 0' }}>
+                        {rehearsalCloseLoading === i ? '拉取中…' : close != null ? close.toFixed(3) : '—'}
                       </div>
                     </div>
                     <div className="field" style={{ flex: '0 0 96px', margin: 0 }}>
@@ -1351,6 +1371,15 @@ export default function Journal() {
                 })}
               </div>
             )}
+
+            <div className="rehearsal-card-footer">
+              <button
+                className="ghost"
+                onClick={() => setRehearsal([...rehearsal, { code: '', name: '', qty: 0, note: '新开仓' }])}
+              >
+                + 预演新开仓
+              </button>
+            </div>
           </div>
 
           {data.rehearsal_ai_analysis?.trim() && (

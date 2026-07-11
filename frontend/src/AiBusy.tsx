@@ -38,12 +38,14 @@ function AiBusyIndicator({ mode, label }: { mode: AiBusyMode; label: string }) {
     case 'banner':
       return (
         <div className="ai-busy-banner no-print" role="status" aria-live="polite">
-          <div className="ai-busy-banner-inner">
-            <div className="quit-spinner ai-busy-spinner-sm" />
-            <div>
-              <div className="ai-busy-banner-text">{label}</div>
-              <div className="ai-busy-banner-sub">AI 处理中，可继续浏览页面</div>
-            </div>
+          <div className="ai-busy-banner-track" aria-hidden="true">
+            <div className="ai-busy-banner-progress" />
+          </div>
+          <div className="ai-busy-banner-chip">
+            <span className="ai-busy-pulse" aria-hidden="true" />
+            <span className="ai-busy-banner-text">{label}</span>
+            <span className="ai-busy-banner-sep" aria-hidden="true" />
+            <span className="ai-busy-banner-sub">可继续浏览</span>
           </div>
         </div>
       );

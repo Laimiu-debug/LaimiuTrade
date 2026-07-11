@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { api, fmtMoney, today } from '../api';
 import { Empty, useToast, DateInput, NumberInput, StockPicker } from '../components';
 
+import { fetchCloseOnDay } from '../marketClose';
+
 interface SnapPosition { code?: string; name?: string; qty?: number; price?: number; market_value?: number }
 type EditPosition = SnapPosition & { _key: string };
 
@@ -75,17 +77,6 @@ function stripKeys(positions: EditPosition[]): SnapPosition[] {
 
 function isValidCode(code: string | undefined): boolean {
   return /^\d{6}$/.test(code ?? '');
-}
-
-async function fetchCloseOnDay(code: string, day: string): Promise<number | null> {
-  try {
-    const r = await api.get<{ klines: { date: string; close: number }[] }>(`/api/market/${code}?limit=120`);
-    const valid = r.klines.filter(k => k.date <= day);
-    if (valid.length === 0) return null;
-    return valid[valid.length - 1].close;
-  } catch {
-    return null;
-  }
 }
 
 const PAGE_SIZE = 20;
@@ -325,7 +316,7 @@ export default function Capital() {
           </div>
         </div>
         <div className="row" style={{ marginBottom: 16 }}>
-          <DateInput value={snapForm.snap_date} onChange={v => setSnapForm({ ...snapForm, snap_date: v })} style={{ width: 150 }} />
+          <DateInput value={snapForm.snap_date} onChange={v => setSnapForm({ ...snapForm, snap_date: v })} />
           <NumberInput placeholder="收盘总资产（现金+持仓市值）" style={{ flex: 1, minWidth: 140 }}
             value={snapForm.total_assets}
             onChange={v => setSnapForm({ ...snapForm, total_assets: v })} />

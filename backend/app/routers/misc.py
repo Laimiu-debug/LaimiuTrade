@@ -299,6 +299,13 @@ def lookup_stock(q: str = ""):
     raise HTTPException(404, "未找到匹配股票")
 
 
+@router.get("/market/{code}/close")
+def market_close_on_day(code: str, day: date, db: Session = Depends(get_db)):
+    """指定日收盘价（取该日或之前最近交易日），比拉全量 K 线更轻。"""
+    close = market_svc.close_on_day(db, code, day.isoformat())
+    return {"code": code, "day": day.isoformat(), "close": close}
+
+
 @router.get("/market/{code}")
 def market_daily(code: str, limit: int = 120, db: Session = Depends(get_db)):
     return market_svc.get_daily(db, code, limit)

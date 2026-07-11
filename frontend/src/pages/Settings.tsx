@@ -200,7 +200,7 @@ export default function Settings() {
           初始资金、入金、出金按单位净值法折算份额，收益率不受出入金影响。
         </div>
         <div className="row" style={{ marginBottom: 16 }}>
-          <DateInput value={flowForm.flow_date} onChange={v => setFlowForm({ ...flowForm, flow_date: v })} style={{ width: 150 }} />
+          <DateInput value={flowForm.flow_date} onChange={v => setFlowForm({ ...flowForm, flow_date: v })} />
           <Select
             value={flowForm.kind}
             onChange={v => setFlowForm({ ...flowForm, kind: v })}

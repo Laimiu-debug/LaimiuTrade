@@ -252,6 +252,34 @@ export function NumberInput({ value, onChange, placeholder, style, className }: 
   );
 }
 
+export function QtyStepper({ value, onChange, step = 100, min = 0, style, className }: {
+  value: number;
+  onChange: (v: number) => void;
+  step?: number;
+  min?: number;
+  style?: CSSProperties;
+  className?: string;
+}) {
+  const dec = () => onChange(Math.max(min, value - step));
+  const inc = () => onChange(value + step);
+  return (
+    <div className={`qty-stepper${className ? ` ${className}` : ''}`} style={style}>
+      <button type="button" className="qty-stepper-btn" onClick={dec} disabled={value <= min} aria-label={`减少 ${step} 股`}>−</button>
+      <input
+        type="text"
+        inputMode="numeric"
+        className="qty-stepper-input input-number"
+        value={String(value)}
+        onChange={e => {
+          const v = e.target.value;
+          if (v === '' || /^\d+$/.test(v)) onChange(v === '' ? 0 : parseInt(v, 10));
+        }}
+      />
+      <button type="button" className="qty-stepper-btn" onClick={inc} aria-label={`增加 ${step} 股`}>+</button>
+    </div>
+  );
+}
+
 interface StockHit { code: string; name: string }
 
 function usePickerClickOutside(

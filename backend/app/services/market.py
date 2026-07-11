@@ -5,6 +5,7 @@
 """
 
 import struct
+import time
 from datetime import date
 from pathlib import Path
 
@@ -119,7 +120,18 @@ def read_eastmoney(code: str, limit: int = 120) -> list[dict]:
 
 # ---------- 链路 ----------
 
+_daily_cache: dict[tuple[str, int], tuple[float, dict]] = {}
+_DAILY_CACHE_TTL = 300.0
+
+
 def get_daily(db: Session, code: str, limit: int = 120) -> dict:
+    key = (code, limit)
+    now = time.monotonic()
+    cached = _daily_cache.get(key)
+    if cached is not None:
+        ts, val = cached
+        if now - ts < _DAILY_CACHE_TTL:
+            return val
     priority = [s.strip() for s in settings_svc.get(db, "market_priority").split(",") if s.strip()]
     errors: list[str] = []
     for source in priority:
@@ -133,10 +145,20 @@ def get_daily(db: Session, code: str, limit: int = 120) -> dict:
             else:
                 continue
             if data:
-                return {"source": source, "code": code, "klines": data}
+                result = {"source": source, "code": code, "klines": data}
+                _daily_cache[key] = (now, result)
+                return result
         except Exception as exc:  # noqa: BLE001 - 逐源降级，任何异常都尝试下一源
             errors.append(f"{source}: {exc}")
-    return {"source": None, "code": code, "klines": [], "errors": errors}
+    result = {"source": None, "code": code, "klines": [], "errors": errors}
+    _daily_cache[key] = (now, result)
+    return result
+
+
+def close_on_day(db: Session, code: str, day_str: str, limit: int = 40) -> float | None:
+    """指定交易日（或之前最近交易日）的收盘价。"""
+    klines = get_daily(db, code, limit).get("klines") or []
+    return _close_on_or_before(klines, day_str)
 
 
 # ---------- 股票 / ETF 搜索 ----------

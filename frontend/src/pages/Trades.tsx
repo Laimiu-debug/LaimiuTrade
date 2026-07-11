@@ -400,7 +400,6 @@ export default function Trades() {
                       <DateInput
                         value={edit.trade_date}
                         onChange={v => setPendingEdit(p.id, { trade_date: v })}
-                        style={{ width: 130 }}
                       />
                     </td>
                     <td>
@@ -476,7 +475,7 @@ export default function Trades() {
       <div className="card" style={{ marginBottom: 18 }}>
         <h3 className="card-title">手动录入</h3>
         <div className="row">
-          <DateInput value={form.trade_date} onChange={v => setForm({ ...form, trade_date: v })} style={{ width: 150 }} />
+          <DateInput value={form.trade_date} onChange={v => setForm({ ...form, trade_date: v })} />
           <StockPicker
             code={form.code}
             name={form.name}
